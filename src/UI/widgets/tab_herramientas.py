@@ -1,10 +1,10 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QLabel)
 
 # Importaciones de subpestañas (Ajustadas al estándar de nomenclatura que aplicaremos)
-from src.UI.widgets.subTabs_Herramientas.tab_extraer import SubTabExtraer
-from src.UI.widgets.subTabs_Herramientas.tab_exportar import SubTabExportar
-from src.UI.widgets.subTabs_Herramientas.tab_puntajes import SubTabPuntajes
-from src.UI.widgets.subTabs_Herramientas.tab_piloto_automatico import SubTabPilotoAutomatico
+from src.UI.widgets.sub_tabs_herramientas.tab_extraer import SubTabExtraer
+from src.UI.widgets.sub_tabs_herramientas.tab_exportar import SubTabExportar
+from src.UI.widgets.sub_tabs_herramientas.tab_puntajes import SubTabPuntajes
+from src.UI.widgets.sub_tabs_herramientas.tab_piloto_automatico import SubTabPilotoAutomatico
 
 class TabHerramientas(QWidget):
     """

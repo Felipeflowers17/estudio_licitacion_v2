@@ -6,9 +6,8 @@ from PySide6.QtCore import QDate, Qt
 from datetime import datetime
 
 # Importaciones de workers y lógica de negocio
-from src.UI.workers.scraping_worker import TrabajadorExtraccion
 from src.scraper.recolector import RecolectorMercadoPublico
-from src.repositories.almacenar import AlmacenadorLicitaciones
+from src.services.almacenar import AlmacenadorLicitaciones
 from src.services.calculadora import CalculadoraPuntajes
 from src.UI.workers.scraping_worker import TrabajadorExtraccion, TrabajadorExtraccionManual
 

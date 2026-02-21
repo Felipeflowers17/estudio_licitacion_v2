@@ -6,7 +6,7 @@ from PySide6.QtCore import QThread, Signal
 # Importamos las clases refactorizadas con sus nuevos nombres
 from src.repositories.licitaciones_repository import RepositorioLicitaciones
 from src.scraper.recolector import RecolectorMercadoPublico
-from src.repositories.almacenar import AlmacenadorLicitaciones
+from src.services.almacenar import AlmacenadorLicitaciones
 from src.services.calculadora import CalculadoraPuntajes
 from src.utils.logger import configurar_logger
 from src.services.orquestador import OrquestadorIngesta

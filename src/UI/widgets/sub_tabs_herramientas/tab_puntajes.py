@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget
-from src.UI.widgets.subTabs_Herramientas.tab_palabras import SubTabPalabras
-from src.UI.widgets.subTabs_Herramientas.tab_organismos import SubTabOrganismos
+from src.UI.widgets.sub_tabs_herramientas.tab_palabras import SubTabPalabras
+from src.UI.widgets.sub_tabs_herramientas.tab_organismos import SubTabOrganismos
 
 class SubTabPuntajes(QWidget):
     """

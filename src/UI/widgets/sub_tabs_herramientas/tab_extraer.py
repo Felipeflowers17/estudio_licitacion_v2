@@ -1,15 +1,13 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                               QDateEdit, QSpinBox, QPushButton, QGroupBox, 
-                               QMessageBox, QDialog, QLineEdit, QComboBox, 
-                               QDialogButtonBox, QApplication)
+import re
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                               QDateEdit, QSpinBox, QPushButton, QGroupBox,
+                               QMessageBox, QDialog, QLineEdit, QComboBox,
+                               QDialogButtonBox)
 from PySide6.QtCore import QDate, Qt
 from datetime import datetime
 
-# Importaciones de workers y lógica de negocio
-from src.scraper.recolector import RecolectorMercadoPublico
-from src.services.almacenar import AlmacenadorLicitaciones
-from src.services.calculadora import CalculadoraPuntajes
 from src.UI.workers.scraping_worker import TrabajadorExtraccion, TrabajadorExtraccionManual
+
 
 class DialogoIngresoManual(QDialog):
     """
@@ -29,14 +27,20 @@ class DialogoIngresoManual(QDialog):
         self.input_codigo.setPlaceholderText("Ejemplo: 1234-56-LE24")
         self.layout_principal.addWidget(self.input_codigo)
 
+        # Etiqueta de error de validación (oculta por defecto)
+        self.etiqueta_error = QLabel("")
+        self.etiqueta_error.setStyleSheet("color: red; font-size: 11px;")
+        self.etiqueta_error.setVisible(False)
+        self.layout_principal.addWidget(self.etiqueta_error)
+
         self.layout_principal.addSpacing(10)
 
         # Campo para la Etapa de Destino
         self.layout_principal.addWidget(QLabel("Etapa de Destino Inicial:"))
         self.combo_etapa = QComboBox()
         self.combo_etapa.addItems([
-            "Licitaciones Candidatas (Flujo Normal)", 
-            "En Seguimiento (Prioritaria)", 
+            "Licitaciones Candidatas (Flujo Normal)",
+            "En Seguimiento (Prioritaria)",
             "Ofertadas (Postulación Activa)"
         ])
         self.layout_principal.addWidget(self.combo_etapa)
@@ -44,10 +48,39 @@ class DialogoIngresoManual(QDialog):
         self.layout_principal.addSpacing(15)
 
         # Botones de Acción
-        botones = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        botones.accepted.connect(self.accept)
-        botones.rejected.connect(self.reject)
-        self.layout_principal.addWidget(botones)
+        self.botones = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.botones.accepted.connect(self._validar_y_aceptar)
+        self.botones.rejected.connect(self.reject)
+        self.layout_principal.addWidget(self.botones)
+
+    def _validar_y_aceptar(self):
+        """
+        Valida el formato del código antes de cerrar el diálogo.
+        
+        El formato esperado es el estándar de Mercado Público Chile:
+        NNNN-NN-XXYY donde XX son letras y YY son dígitos del año.
+        Ejemplos válidos: 1234-56-LE24, 9876-1-LP2024, 1111-22-LQ23
+        """
+        codigo = self.input_codigo.text().strip()
+
+        # Regex: dígitos - dígitos - 2 letras mayúsculas + dígitos del año
+        patron_valido = r'^\d+-\d+-[A-Z]{2}\d+$'
+
+        if not codigo:
+            self.etiqueta_error.setText("El código no puede estar vacío.")
+            self.etiqueta_error.setVisible(True)
+            return
+
+        if not re.match(patron_valido, codigo):
+            self.etiqueta_error.setText(
+                "Formato inválido. Use el formato estándar: NNNN-NN-LEAA  (ej: 1234-56-LE24)"
+            )
+            self.etiqueta_error.setVisible(True)
+            return
+
+        # Si pasa la validación, ocultamos el error y cerramos el diálogo
+        self.etiqueta_error.setVisible(False)
+        self.accept()
 
     def obtener_parametros(self) -> dict:
         """Mapea la selección visual a los códigos internos de la base de datos."""
@@ -69,7 +102,7 @@ class SubTabExtraer(QWidget):
     """
     def __init__(self):
         super().__init__()
-        
+
         self.layout_principal = QVBoxLayout(self)
         self.layout_principal.setAlignment(Qt.AlignTop)
 
@@ -80,7 +113,7 @@ class SubTabExtraer(QWidget):
         # --- BLOQUE 1: EXTRACCIÓN MASIVA (ASÍNCRONA) ---
         grupo_masivo = QGroupBox("Extracción Masiva por Rango de Fechas")
         layout_masivo = QVBoxLayout(grupo_masivo)
-        
+
         layout_fechas = QHBoxLayout()
         self.fecha_desde = self.crear_selector_fecha()
         layout_fechas.addWidget(QLabel("Fecha de Inicio:"))
@@ -100,6 +133,9 @@ class SubTabExtraer(QWidget):
         layout_paginas.addStretch()
         layout_masivo.addLayout(layout_paginas)
 
+        # Fila de botones: Iniciar + Cancelar (cancelar oculto por defecto)
+        fila_botones_masivo = QHBoxLayout()
+
         self.boton_extraer = QPushButton("Iniciar Extracción Asíncrona")
         self.boton_extraer.setCursor(Qt.PointingHandCursor)
         self.boton_extraer.setFixedHeight(40)
@@ -108,8 +144,22 @@ class SubTabExtraer(QWidget):
             QPushButton:hover { background-color: #00796b; }
         """)
         self.boton_extraer.clicked.connect(self.iniciar_extraccion_masiva)
-        layout_masivo.addWidget(self.boton_extraer)
-        
+
+        self.boton_cancelar = QPushButton("Cancelar Extracción")
+        self.boton_cancelar.setCursor(Qt.PointingHandCursor)
+        self.boton_cancelar.setFixedHeight(40)
+        self.boton_cancelar.setStyleSheet("""
+            QPushButton { background-color: #c62828; color: white; font-weight: bold; border-radius: 4px; }
+            QPushButton:hover { background-color: #b71c1c; }
+        """)
+        self.boton_cancelar.clicked.connect(self.cancelar_extraccion_masiva)
+        # Oculto hasta que inicie una extracción
+        self.boton_cancelar.setVisible(False)
+
+        fila_botones_masivo.addWidget(self.boton_extraer)
+        fila_botones_masivo.addWidget(self.boton_cancelar)
+        layout_masivo.addLayout(fila_botones_masivo)
+
         self.layout_principal.addWidget(grupo_masivo)
         self.trabajador = None
 
@@ -136,7 +186,6 @@ class SubTabExtraer(QWidget):
 
         self.layout_principal.addWidget(grupo_manual)
 
-
     def crear_selector_fecha(self) -> QDateEdit:
         selector = QDateEdit()
         selector.setCalendarPopup(True)
@@ -144,19 +193,20 @@ class SubTabExtraer(QWidget):
         selector.setDisplayFormat("dd/MM/yyyy")
         selector.setFixedWidth(120)
         return selector
-    
+
     # --- LÓGICA DE EXTRACCIÓN MASIVA ---
     def iniciar_extraccion_masiva(self):
         fecha_inicio = self.fecha_desde.date().toPython()
         fecha_termino = self.fecha_hasta.date().toPython()
-        
+
         if fecha_inicio > fecha_termino:
             QMessageBox.warning(self, "Validación Incorrecta", "La fecha de inicio no puede ser posterior a la de término.")
             return
 
         self.boton_extraer.setEnabled(False)
         self.boton_extraer.setText("Operación en Curso... (Por favor, espere)")
-        
+        self.boton_cancelar.setVisible(True)
+
         fecha_inicio_dt = datetime(fecha_inicio.year, fecha_inicio.month, fecha_inicio.day)
         fecha_termino_dt = datetime(fecha_termino.year, fecha_termino.month, fecha_termino.day)
 
@@ -166,33 +216,41 @@ class SubTabExtraer(QWidget):
         self.trabajador.finalizado.connect(self.notificar_finalizacion)
         self.trabajador.start()
 
+    def cancelar_extraccion_masiva(self):
+        """Solicita la detención ordenada del worker activo."""
+        if self.trabajador and self.trabajador.isRunning():
+            self.trabajador.stop()
+            self.boton_cancelar.setEnabled(False)
+            self.boton_cancelar.setText("Deteniendo...")
+
     def registrar_evento(self, mensaje: str):
-        print(f"[PROGRESO EXTRACCIÓN] {mensaje}") 
+        print(f"[PROGRESO EXTRACCIÓN] {mensaje}")
 
     def notificar_finalizacion(self):
         QMessageBox.information(self, "Operación Finalizada", "El proceso de recolección y análisis ha concluido exitosamente.")
-        self.boton_extraer.setEnabled(True)
-        self.boton_extraer.setText("Iniciar Extracción Asíncrona")
+        self._restaurar_botones_masivo()
 
     def desplegar_error(self, mensaje_error: str):
         QMessageBox.critical(self, "Error de Ejecución", mensaje_error)
+        self._restaurar_botones_masivo()
+
+    def _restaurar_botones_masivo(self):
+        """Restaura el estado inicial de los botones tras finalizar o cancelar."""
         self.boton_extraer.setEnabled(True)
         self.boton_extraer.setText("Iniciar Extracción Asíncrona")
-
+        self.boton_cancelar.setVisible(False)
+        self.boton_cancelar.setEnabled(True)
+        self.boton_cancelar.setText("Cancelar Extracción")
 
     # --- LÓGICA DE EXTRACCIÓN MANUAL ---
     def iniciar_extraccion_manual(self):
         """Orquesta la descarga, evaluación y reubicación de una licitación individual de forma asíncrona."""
         dialogo = DialogoIngresoManual(self)
-        
+
         if dialogo.exec():
             parametros = dialogo.obtener_parametros()
             codigo = parametros["codigo"]
             etapa_destino = parametros["etapa"]
-
-            if not codigo:
-                QMessageBox.warning(self, "Validación Requerida", "Debe ingresar un código externo válido para proceder.")
-                return
 
             self.boton_manual.setEnabled(False)
             self.boton_manual.setText("Iniciando proceso...")
@@ -206,7 +264,7 @@ class SubTabExtraer(QWidget):
         """Recibe la señal de término del hilo manual y restaura la interfaz."""
         self.boton_manual.setEnabled(True)
         self.boton_manual.setText("Ingresar Licitación Manualmente")
-        
+
         if exito:
             QMessageBox.information(self, "Operación Exitosa", mensaje)
         else:

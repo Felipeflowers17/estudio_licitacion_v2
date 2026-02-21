@@ -6,6 +6,7 @@ from src.services.almacenar import AlmacenadorLicitaciones
 from src.repositories.licitaciones_repository import RepositorioLicitaciones
 from src.services.instancias import calculadora_compartida
 from src.utils.logger import configurar_logger
+from src.config.constantes import PAUSA_ENTRE_DIAS_EXTRACCION, UMBRAL_PUNTAJE_CANDIDATA
 
 logger = configurar_logger("orquestador_ingesta")
 
@@ -28,8 +29,6 @@ class OrquestadorIngesta:
         self.almacenador = AlmacenadorLicitaciones()
         self.repositorio = RepositorioLicitaciones()
         # Usamos la referencia a la instancia compartida, no una nueva instancia.
-        # Esto garantiza que si el ControladorPuntajes recarga las reglas,
-        # este orquestador verá los cambios de forma inmediata.
         self.calculadora = calculadora_compartida
 
     # =========================================================================
@@ -40,9 +39,6 @@ class OrquestadorIngesta:
                                    callback_progreso=None) -> tuple[bool, str]:
         """
         Descarga, evalúa y almacena una licitación específica por su código.
-        
-        Usa un callback opcional para reportar progreso sin acoplarse a PySide6,
-        lo que permite invocar este método también desde scripts de línea de comandos.
         """
         def emitir(mensaje: str):
             if callback_progreso:
@@ -72,7 +68,6 @@ class OrquestadorIngesta:
                 cod_org, desc, items_str
             )
 
-            # Inyección de metadatos del análisis en el diccionario de datos
             datos_api["_PuntajeCalculado"] = puntaje_inicial + puntaje_detalle
             datos_api["_TieneDetalle"] = True
             datos_api["_EstadoDescarga"] = "exitoso_manual"
@@ -98,15 +93,6 @@ class OrquestadorIngesta:
                               verificador_ejecucion=None) -> dict:
         """
         Orquesta la descarga masiva de licitaciones en un rango de fechas.
-        
-        Args:
-            fecha_inicio: Fecha de inicio del rango (datetime).
-            fecha_fin: Fecha de fin del rango (datetime).
-            callback_progreso: Función opcional que recibe strings de progreso.
-            verificador_ejecucion: Función opcional que retorna False para detener el proceso.
-            
-        Returns:
-            Diccionario con estadísticas acumuladas de la operación.
         """
         def emitir(mensaje: str):
             if callback_progreso:
@@ -166,8 +152,8 @@ class OrquestadorIngesta:
             emitir(f"   - Errores/Pendientes:         {stats_dia['detalles_pendientes']}")
 
             if i < dias_totales - 1 and debe_continuar():
-                emitir("\n[SISTEMA] Pausa de seguridad (5s) antes del siguiente día...")
-                time.sleep(5)
+                emitir(f"\n[SISTEMA] Pausa de seguridad ({PAUSA_ENTRE_DIAS_EXTRACCION}s) antes del siguiente día...")
+                time.sleep(PAUSA_ENTRE_DIAS_EXTRACCION)
 
         return estadisticas
 
@@ -178,9 +164,7 @@ class OrquestadorIngesta:
     def _procesar_listado_diario(self, licitaciones: list, total_dia: int,
                                   emitir, debe_continuar) -> dict:
         """
-        Procesa cada licitación de un día: evalúa, descarga detalle si aplica
-        y persiste. Aislado en método privado para ser testeable de forma
-        independiente al procesamiento del rango completo.
+        Procesa cada licitación de un día: evalúa, descarga detalle si aplica y persiste.
         """
         stats = {
             'detalles_exitosos': 0,
@@ -213,9 +197,6 @@ class OrquestadorIngesta:
         """
         Evalúa una licitación individual: aplica filtro de puntaje en título,
         y si supera el umbral, descarga y evalúa la ficha técnica completa.
-        
-        Retorna el diccionario de datos enriquecido con metadatos y un
-        mini-diccionario de estadísticas para este ítem.
         """
         stats = {'detalles_exitosos': 0, 'detalles_omitidos': 0,
                  'detalles_pendientes': 0, 'errores': 0}
@@ -230,7 +211,7 @@ class OrquestadorIngesta:
         estado_descarga = "sin_intentar"
         etapa_asignada = "ignorada"
 
-        if puntaje_inicial <= 0:
+        if puntaje_inicial <= UMBRAL_PUNTAJE_CANDIDATA:
             # Filtro de primera capa: descartamos sin gastar peticiones de API
             stats['detalles_omitidos'] += 1
             estado_descarga = "omitido_puntaje_negativo"
@@ -255,7 +236,7 @@ class OrquestadorIngesta:
                 )
                 puntaje_final = puntaje_inicial + puntaje_detalle
                 motivos.extend(motivos_detalle)
-                etapa_asignada = "candidata" if puntaje_final > 0 else "ignorada"
+                etapa_asignada = "candidata" if puntaje_final > UMBRAL_PUNTAJE_CANDIDATA else "ignorada"
 
             else:
                 if estado_api in ['error_servidor', 'error_red']:
@@ -267,7 +248,6 @@ class OrquestadorIngesta:
                     stats['errores'] += 1
                     estado_descarga = f"error_{estado_api}"
 
-        # Inyección de metadatos calculados en el diccionario de datos
         datos_completos["_PuntajeCalculado"] = puntaje_final
         datos_completos["_TieneDetalle"] = tiene_detalle
         datos_completos["_EstadoDescarga"] = estado_descarga

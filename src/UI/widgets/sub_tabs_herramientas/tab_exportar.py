@@ -1,21 +1,25 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, 
-                               QPushButton, QGroupBox, QFileDialog, QMessageBox, QLabel, QApplication)
+                               QPushButton, QGroupBox, QFileDialog, QMessageBox, QLabel)
 from PySide6.QtCore import Qt
 
-# Importamos la clase del servicio refactorizado
-from src.services.exportador import ServicioExportador
+from src.UI.workers.export_worker import TrabajadorExportacion
+
 
 class SubTabExportar(QWidget):
     """
     Subpestaña dedicada a la configuración y generación de reportes 
     y respaldos de la base de datos hacia formatos estandarizados.
+    
+    La exportación se ejecuta en un hilo separado (TrabajadorExportacion)
+    para evitar el bloqueo de la interfaz gráfica durante la operación.
     """
     def __init__(self):
         super().__init__()
         self.layout_principal = QVBoxLayout(self)
         self.layout_principal.setAlignment(Qt.AlignTop)
-        
-        self.servicio = ServicioExportador()
+
+        # Referencia al worker activo (None cuando no hay exportación en curso)
+        self.trabajador = None
 
         etiqueta_titulo = QLabel("Exportación y Reportes")
         etiqueta_titulo.setStyleSheet("font-size: 18px; font-weight: bold; color: #333;")
@@ -24,14 +28,13 @@ class SubTabExportar(QWidget):
         # Bloque 1: Selección de alcance de datos
         grupo_datos = QGroupBox("1. Seleccionar Entidades a Exportar")
         layout_datos = QVBoxLayout()
-        
-        # Eliminación de elementos gráficos (emojis) en favor de etiquetas formales
+
         self.casilla_candidatas = QCheckBox("[Etapa] Licitaciones Candidatas")
         self.casilla_seguimiento = QCheckBox("[Etapa] Licitaciones en Seguimiento")
         self.casilla_ofertadas = QCheckBox("[Etapa] Licitaciones Ofertadas")
         self.casilla_completa = QCheckBox("[Respaldo] Base de Datos Completa")
         self.casilla_reglas = QCheckBox("[Configuración] Reglas de Negocio y Organismos")
-        
+
         self.casilla_candidatas.setChecked(True)
 
         layout_datos.addWidget(self.casilla_candidatas)
@@ -45,11 +48,11 @@ class SubTabExportar(QWidget):
         # Bloque 2: Selección de formato de salida
         grupo_formato = QGroupBox("2. Definir Formato de Destino")
         layout_formato = QHBoxLayout()
-        
+
         self.casilla_xlsx = QCheckBox("Hoja de Cálculo Excel (.xlsx)")
         self.casilla_csv = QCheckBox("Archivo de Texto Plano (.csv)")
-        
-        self.casilla_xlsx.setChecked(True) 
+
+        self.casilla_xlsx.setChecked(True)
 
         layout_formato.addWidget(self.casilla_xlsx)
         layout_formato.addWidget(self.casilla_csv)
@@ -70,20 +73,20 @@ class SubTabExportar(QWidget):
         self.layout_principal.addWidget(self.boton_exportar)
 
     def iniciar_exportacion(self):
-        """Valida las selecciones del usuario y orquesta el servicio de exportación."""
+        """Valida las selecciones del usuario y lanza el worker de exportación."""
         if not (self.casilla_xlsx.isChecked() or self.casilla_csv.isChecked()):
             QMessageBox.warning(self, "Validación Requerida", "Es obligatorio seleccionar al menos un formato de destino.")
             return
 
         if not any([self.casilla_candidatas.isChecked(), self.casilla_seguimiento.isChecked(),
-                    self.casilla_ofertadas.isChecked(), self.casilla_completa.isChecked(), 
+                    self.casilla_ofertadas.isChecked(), self.casilla_completa.isChecked(),
                     self.casilla_reglas.isChecked()]):
             QMessageBox.warning(self, "Validación Requerida", "Debe marcar al menos un conjunto de datos para proceder con la exportación.")
             return
 
         directorio_destino = QFileDialog.getExistingDirectory(self, "Definir Directorio de Destino")
         if not directorio_destino:
-            return 
+            return
 
         parametros_exportacion = {
             'candidatas': self.casilla_candidatas.isChecked(),
@@ -95,18 +98,21 @@ class SubTabExportar(QWidget):
             'csv': self.casilla_csv.isChecked()
         }
 
+        # Bloqueamos el botón para evitar doble clic durante la operación
         self.boton_exportar.setEnabled(False)
         self.boton_exportar.setText("Generando Reportes... (Por favor, espere)")
-        
-        # Fuerza el refresco de la interfaz gráfica antes de invocar el proceso bloqueante
-        QApplication.processEvents() 
 
-        operacion_exitosa, mensaje_resultado = self.servicio.generar_reporte(parametros_exportacion, directorio_destino)
-        
+        # Lanzamos la exportación en un hilo separado
+        self.trabajador = TrabajadorExportacion(parametros_exportacion, directorio_destino)
+        self.trabajador.finalizado.connect(self._procesar_resultado)
+        self.trabajador.start()
+
+    def _procesar_resultado(self, exito: bool, mensaje: str):
+        """Recibe la señal del worker y restaura la interfaz."""
         self.boton_exportar.setEnabled(True)
         self.boton_exportar.setText("Seleccionar Directorio y Procesar")
 
-        if operacion_exitosa:
-            QMessageBox.information(self, "Exportación Exitosa", mensaje_resultado)
+        if exito:
+            QMessageBox.information(self, "Exportación Exitosa", mensaje)
         else:
-            QMessageBox.critical(self, "Falla en Exportación", mensaje_resultado)
+            QMessageBox.critical(self, "Falla en Exportación", mensaje)

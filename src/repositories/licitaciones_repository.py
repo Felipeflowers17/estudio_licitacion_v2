@@ -3,37 +3,42 @@ from sqlalchemy import or_
 from src.bd.database import SessionLocal
 from src.bd.models import Licitacion
 from src.utils.logger import configurar_logger
+from src.config.constantes import (
+    ESTADO_LICITACION_ACTIVA,
+    LIMITE_LICITACIONES_ACTIVAS,
+    LIMITE_CANDIDATAS_VISIBLES,
+    UMBRAL_PUNTAJE_CANDIDATA
+)
 
-# Instanciamos el logger para este módulo específico
 logger = configurar_logger("repositorio_licitaciones")
+
 
 class RepositorioLicitaciones:
     """
     Gestiona las transacciones y consultas de base de datos para las licitaciones.
     Centraliza la lógica de filtrado y cambio de etapas del modelo MVC.
     """
-    
+
     def __init__(self, session_factory=SessionLocal):
         """
         Inicializa el controlador aplicando el patrón de Inyección de Dependencias.
         Permite reemplazar la fábrica de sesiones real por una simulada durante las pruebas (testing).
         """
         self.session_factory = session_factory
-    
+
     def obtener_licitaciones_activas(self) -> list:
         """
-        Recupera las licitaciones con estado publicado (código 5).
+        Recupera las licitaciones con estado publicado (código definido en constantes).
         Utiliza joinedload para cargar la relación 'estado' en memoria
         y prevenir errores de sesión cerrada en la capa de vista.
         """
-        # El gestor de contexto 'with' asegura que sesion.close() se ejecute implícitamente al salir del bloque
         with self.session_factory() as sesion:
             try:
                 resultados = sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
-                    .filter(Licitacion.codigo_estado == 5)\
+                    .filter(Licitacion.codigo_estado == ESTADO_LICITACION_ACTIVA)\
                     .order_by(Licitacion.puntaje.desc())\
-                    .limit(200).all()
+                    .limit(LIMITE_LICITACIONES_ACTIVAS).all()
                 return resultados
             except Exception as e:
                 logger.error(f"Error consultando licitaciones activas: {e}")
@@ -49,12 +54,10 @@ class RepositorioLicitaciones:
                 licitacion = sesion.query(Licitacion).filter_by(codigo_externo=codigo_externo).first()
                 if licitacion:
                     licitacion.etapa = nueva_etapa
-                    # Confirmamos la transacción solo si la asignación fue exitosa
                     sesion.commit()
                     return True
                 return False
             except Exception as e:
-                # Es vital realizar un rollback explícito en transacciones de escritura para evitar bloqueos en la BD
                 sesion.rollback()
                 logger.error(f"Error al mover la licitación {codigo_externo} a {nueva_etapa}: {e}")
                 return False
@@ -68,10 +71,10 @@ class RepositorioLicitaciones:
             try:
                 resultados = sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
-                    .filter(Licitacion.puntaje > 0)\
+                    .filter(Licitacion.puntaje > UMBRAL_PUNTAJE_CANDIDATA)\
                     .filter(or_(Licitacion.etapa == "candidata", Licitacion.etapa == None))\
                     .order_by(Licitacion.puntaje.desc())\
-                    .limit(1000).all()
+                    .limit(LIMITE_CANDIDATAS_VISIBLES).all()
                 return resultados
             except Exception as e:
                 logger.error(f"Error obteniendo candidatas: {e}")
@@ -102,7 +105,7 @@ class RepositorioLicitaciones:
             except Exception as e:
                 logger.error(f"Error obteniendo licitaciones ofertadas: {e}")
                 return []
-    
+
     def obtener_licitacion_por_codigo(self, codigo_externo: str):
         """
         Obtiene el detalle completo de una licitación, incluyendo las entidades 

@@ -1,28 +1,32 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QLabel, 
                                QTextEdit, QGroupBox, QScrollArea, QWidget)
 from PySide6.QtCore import Qt
-from src.repositories.licitaciones_repository import RepositorioLicitaciones
 
 class DialogoDetalleLicitacion(QDialog):
     """
     Ventana emergente que muestra el detalle completo y profundo de una licitación,
     incluyendo su justificación de puntaje y el listado de productos requeridos.
+    Actúa estrictamente como una Vista pasiva: recibe los datos y los renderiza.
     """
     
-    def __init__(self, codigo_externo: str, parent=None):
+    def __init__(self, licitacion_data, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Ficha Técnica de Licitación: {codigo_externo}")
-        self.resize(850, 800)
         
-        self.controlador = RepositorioLicitaciones()
-        self.licitacion = self.controlador.obtener_licitacion_por_codigo(codigo_externo)
+        # Inyección de dependencias: la vista ya no busca los datos, los recibe.
+        self.licitacion = licitacion_data
+        
+        if not self.licitacion:
+            self.setWindowTitle("Ficha Técnica - Error")
+            self.resize(400, 200)
+            self.layout_principal = QVBoxLayout(self)
+            self.layout_principal.addWidget(QLabel("[ERROR] No se recibieron datos para esta licitación."))
+            return
+
+        self.setWindowTitle(f"Ficha Técnica de Licitación: {self.licitacion.codigo_externo}")
+        self.resize(850, 800)
         
         self.layout_principal = QVBoxLayout(self)
         
-        if not self.licitacion:
-            self.layout_principal.addWidget(QLabel("[ERROR] No se encontró información para esta licitación en la base de datos."))
-            return
-
         area_desplazable = QScrollArea()
         area_desplazable.setWidgetResizable(True)
         widget_contenido = QWidget()

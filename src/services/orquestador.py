@@ -6,7 +6,7 @@ from src.services.almacenar import AlmacenadorLicitaciones
 from src.repositories.licitaciones_repository import RepositorioLicitaciones
 from src.services.instancias import calculadora_compartida
 from src.utils.logger import configurar_logger
-from src.config.constantes import PAUSA_ENTRE_DIAS_EXTRACCION, UMBRAL_PUNTAJE_CANDIDATA
+from src.config.constantes import PAUSA_ENTRE_DIAS_EXTRACCION, UMBRAL_PUNTAJE_CANDIDATA, EtapaLicitacion
 
 logger = configurar_logger("orquestador_ingesta")
 
@@ -209,7 +209,8 @@ class OrquestadorIngesta:
         tiene_detalle = False
         puntaje_final = puntaje_inicial
         estado_descarga = "sin_intentar"
-        etapa_asignada = "ignorada"
+        # Iniciamos con el valor seguro del Enum
+        etapa_asignada = EtapaLicitacion.IGNORADA.value
 
         if puntaje_inicial <= UMBRAL_PUNTAJE_CANDIDATA:
             # Filtro de primera capa: descartamos sin gastar peticiones de API
@@ -236,7 +237,12 @@ class OrquestadorIngesta:
                 )
                 puntaje_final = puntaje_inicial + puntaje_detalle
                 motivos.extend(motivos_detalle)
-                etapa_asignada = "candidata" if puntaje_final > UMBRAL_PUNTAJE_CANDIDATA else "ignorada"
+                
+                # Asignación de etapa utilizando Enums
+                if puntaje_final > UMBRAL_PUNTAJE_CANDIDATA:
+                    etapa_asignada = EtapaLicitacion.CANDIDATA.value 
+                else:
+                    etapa_asignada = EtapaLicitacion.IGNORADA.value
 
             else:
                 if estado_api in ['error_servidor', 'error_red']:

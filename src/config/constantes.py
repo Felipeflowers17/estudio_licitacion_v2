@@ -1,8 +1,16 @@
 """
 Archivo centralizado de constantes y reglas de negocio globales.
-Evita el uso de 'Magic Numbers' en el código fuente, facilitando
-la configuración y mantenimiento del sistema.
+Evita el uso de 'Magic Numbers' y 'Magic Strings' en el código fuente, 
+facilitando la configuración y mantenimiento del sistema.
 """
+from enum import Enum
+
+# Definición de las Etapas del Flujo de Licitaciones
+class EtapaLicitacion(Enum):
+    CANDIDATA = "candidata"
+    SEGUIMIENTO = "seguimiento"
+    OFERTADA = "ofertada"
+    IGNORADA = "ignorada"
 
 # Estados de Licitación (API Mercado Público)
 ESTADO_LICITACION_ACTIVA = 5

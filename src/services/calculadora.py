@@ -1,4 +1,5 @@
 import re
+import threading
 from src.bd.database import SessionLocal
 from src.bd.models import PalabraClave, Organismo
 from src.utils.logger import configurar_logger
@@ -7,38 +8,51 @@ logger = configurar_logger("calculadora_puntajes")
 
 class CalculadoraPuntajes:
     """
-    Servicio encargado de aplicar las reglas de negocio sobre los textos 
-    de las licitaciones para determinar su viabilidad (puntaje).
-    Implementa precisión léxica estricta mediante expresiones regulares 
-    para erradicar falsos positivos por subcadenas.
+    Servicio encargado de aplicar las reglas de negocio sobre los textos.
+    Implementa precompilación de expresiones regulares para evitar 
+    cuellos de botella de CPU durante el procesamiento masivo.
+    
+    Implementa Thread Safety (Lock) para permitir la recarga en caliente
+    de reglas de negocio sin colisionar con hilos de evaluación en segundo plano.
     """
 
     def __init__(self, session_factory=SessionLocal):
-        """
-        Inicializa la calculadora inyectando la fábrica de sesiones.
-        Carga inmediatamente las reglas en memoria para optimizar el rendimiento de evaluación.
-        """
         self.session_factory = session_factory
-        self.reglas_en_memoria = []
+        self.reglas_compiladas = []
+        # Candado de exclusión mutua (Mutex) para operaciones seguras entre hilos
+        self.cerrojo = threading.Lock()
         self.cargar_reglas_negocio()
 
     def cargar_reglas_negocio(self):
-        """Carga el diccionario completo de palabras clave desde la base de datos."""
-        # Utilizamos el gestor de contexto para una lectura rápida, segura y que libere memoria
+        """
+        Carga las reglas y precompila los patrones de búsqueda léxica.
+        Se construye la nueva lista en memoria y luego se intercambia de forma
+        atómica mediante el cerrojo para no interrumpir evaluaciones en curso.
+        """
         with self.session_factory() as sesion:
             try:
-                self.reglas_en_memoria = sesion.query(PalabraClave).all()
-                logger.info(f"Reglas de negocio cargadas en memoria: {len(self.reglas_en_memoria)} ítems.")
+                reglas_bd = sesion.query(PalabraClave).all()
+                nuevas_reglas = []
+                
+                for regla in reglas_bd:
+                    patron_texto = rf"\b{re.escape(regla.palabra.lower())}\b"
+                    patron_compilado = re.compile(patron_texto)
+                    nuevas_reglas.append((regla, patron_compilado))
+                    
+                # Bloque crítico: Intercambio seguro de la lista en memoria
+                with self.cerrojo:
+                    self.reglas_compiladas = nuevas_reglas
+                    
+                logger.info(f"Reglas de negocio cargadas y precompiladas: {len(self.reglas_compiladas)} ítems.")
             except Exception as error_carga:
                 logger.error(f"Error al cargar las reglas de negocio: {error_carga}")
-                self.reglas_en_memoria = []
+                with self.cerrojo:
+                    self.reglas_compiladas = []
 
     def evaluar_titulo(self, texto_titulo: str) -> tuple:
         """
-        Analiza el nombre de la licitación buscando coincidencias exactas.
-        Retorna: (puntaje_total, lista_de_motivos)
+        Analiza el nombre de la licitación iterando sobre los patrones ya precompilados.
         """
-        # Este método es puro y opera en RAM. No requiere apertura de conexión a BD.
         if not texto_titulo: 
             return 0, []
         
@@ -46,11 +60,13 @@ class CalculadoraPuntajes:
         registro_motivos = [] 
         texto_minusculas = texto_titulo.lower()
         
-        for regla in self.reglas_en_memoria:
+        # Bloque crítico: Copia rápida (shallow copy) para iterar sin bloquear la lista original
+        with self.cerrojo:
+            reglas_locales = list(self.reglas_compiladas)
+        
+        for regla, patron in reglas_locales:
             if regla.puntaje_titulo != 0:
-                # Búsqueda léxica estricta con fronteras de palabra (\b)
-                patron = rf"\b{re.escape(regla.palabra.lower())}\b"
-                if re.search(patron, texto_minusculas):
+                if patron.search(texto_minusculas):
                     puntos = regla.puntaje_titulo
                     puntaje_acumulado += puntos
                     registro_motivos.append(f"[MATCH TÍTULO] '{regla.palabra}' ({puntos:+d})")
@@ -59,17 +75,13 @@ class CalculadoraPuntajes:
 
     def evaluar_detalle(self, codigo_organismo: str, descripcion: str, texto_productos: str) -> tuple:
         """
-        Analiza la descripción técnica, los productos y el organismo comprador.
-        Aplica evaluación léxica exacta para evitar falsos positivos.
-        Retorna: (puntaje_total, lista_de_motivos)
+        Analiza descripción, productos y organismo utilizando patrones precompilados.
         """
         puntaje_acumulado = 0
         registro_motivos = []
         
-        # Apertura de sesión efímera y segura para consultar el catálogo de organismos
         with self.session_factory() as sesion:
             try:
-                # 1. Evaluación por Organismo Comprador
                 if codigo_organismo:
                     organismo_bd = sesion.query(Organismo).filter_by(codigo=codigo_organismo).first()
                     if organismo_bd and organismo_bd.puntaje != 0:
@@ -79,17 +91,18 @@ class CalculadoraPuntajes:
                 desc_minusculas = descripcion.lower() if descripcion else ""
                 prod_minusculas = texto_productos.lower() if texto_productos else ""
 
-                # 2. Evaluación Léxica Estricta por Palabras Clave
-                for regla in self.reglas_en_memoria:
-                    patron_busqueda = rf"\b{re.escape(regla.palabra.lower())}\b"
+                # Bloque crítico: Copia rápida (shallow copy) para lectura segura
+                with self.cerrojo:
+                    reglas_locales = list(self.reglas_compiladas)
 
+                for regla, patron in reglas_locales:
                     if regla.puntaje_descripcion != 0 and desc_minusculas:
-                        if re.search(patron_busqueda, desc_minusculas):
+                        if patron.search(desc_minusculas):
                             puntaje_acumulado += regla.puntaje_descripcion
                             registro_motivos.append(f"[MATCH EXACTO DESC] '{regla.palabra}' ({regla.puntaje_descripcion:+d})")
                     
                     if regla.puntaje_productos != 0 and prod_minusculas:
-                        if re.search(patron_busqueda, prod_minusculas):
+                        if patron.search(prod_minusculas):
                             puntaje_acumulado += regla.puntaje_productos
                             registro_motivos.append(f"[MATCH EXACTO PROD] '{regla.palabra}' ({regla.puntaje_productos:+d})")
                             

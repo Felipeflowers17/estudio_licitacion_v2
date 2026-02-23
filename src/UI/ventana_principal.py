@@ -51,7 +51,6 @@ class VentanaPrincipal(QMainWindow):
         self.lista_menu = QListWidget()
         self.lista_menu.setObjectName("MenuLista")
         
-        # Menú formalizado sin caracteres gráficos
         self.agregar_boton_menu("Licitaciones Candidatas")
         self.agregar_boton_menu("Licitaciones en Seguimiento")
         self.agregar_boton_menu("Licitaciones Ofertadas")
@@ -81,10 +80,21 @@ class VentanaPrincipal(QMainWindow):
         self.pila_vistas.addWidget(self.vista_ofertadas)
         self.pila_vistas.addWidget(self.vista_herramientas)
         
+        # Conexión del bus de eventos: Escuchamos las señales de movimiento de datos
+        self.vista_candidatas.datos_actualizados_global.connect(self.invalidar_caches)
+        self.vista_seguimiento.datos_actualizados_global.connect(self.invalidar_caches)
+        self.vista_ofertadas.datos_actualizados_global.connect(self.invalidar_caches)
+        
         self.layout_principal.addWidget(self.pila_vistas)
 
+    def invalidar_caches(self):
+        """Ensucia las banderas de las tablas. Forzará una recarga cuando el usuario las visite."""
+        self.vista_candidatas.marcar_como_desactualizada()
+        self.vista_seguimiento.marcar_como_desactualizada()
+        self.vista_ofertadas.marcar_como_desactualizada()
+
     def cambiar_pagina(self, indice: int):
-        """Alterna entre las diferentes vistas y fuerza su actualización de datos."""
+        """Alterna entre las diferentes vistas y delega la actualización condicional."""
         self.pila_vistas.setCurrentIndex(indice)
         widget_actual = self.pila_vistas.currentWidget()
         if hasattr(widget_actual, 'actualizar_datos'):

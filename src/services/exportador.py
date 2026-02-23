@@ -4,6 +4,7 @@ import pandas as pd
 from src.bd.database import SessionLocal
 from src.bd.models import Licitacion, PalabraClave, Organismo
 from src.utils.logger import configurar_logger
+from src.config.constantes import EtapaLicitacion
 
 logger = configurar_logger("servicio_exportador")
 
@@ -35,17 +36,17 @@ class ServicioExportador:
         # todo el ciclo de iteración de reportes
         with self.session_factory() as sesion:
             try:
-                # Bloque 1: Exportación de Licitaciones filtradas por etapa
+                # Bloque 1: Exportación de Licitaciones filtradas usando Enums
                 if opciones.get('candidatas'):
-                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == 'candidata')
+                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.CANDIDATA.value)
                     self._exportar_consulta(sesion, "Candidatas", consulta, carpeta_final, opciones)
 
                 if opciones.get('seguimiento'):
-                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == 'seguimiento')
+                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.SEGUIMIENTO.value)
                     self._exportar_consulta(sesion, "Seguimiento", consulta, carpeta_final, opciones)
 
                 if opciones.get('ofertadas'):
-                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == 'ofertada')
+                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.OFERTADA.value)
                     self._exportar_consulta(sesion, "Ofertadas", consulta, carpeta_final, opciones)
 
                 if opciones.get('full_db'):

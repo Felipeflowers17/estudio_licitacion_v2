@@ -7,7 +7,8 @@ from src.config.constantes import (
     ESTADO_LICITACION_ACTIVA,
     LIMITE_LICITACIONES_ACTIVAS,
     LIMITE_CANDIDATAS_VISIBLES,
-    UMBRAL_PUNTAJE_CANDIDATA
+    UMBRAL_PUNTAJE_CANDIDATA,
+    EtapaLicitacion
 )
 
 logger = configurar_logger("repositorio_licitaciones")
@@ -20,18 +21,9 @@ class RepositorioLicitaciones:
     """
 
     def __init__(self, session_factory=SessionLocal):
-        """
-        Inicializa el controlador aplicando el patrón de Inyección de Dependencias.
-        Permite reemplazar la fábrica de sesiones real por una simulada durante las pruebas (testing).
-        """
         self.session_factory = session_factory
 
     def obtener_licitaciones_activas(self) -> list:
-        """
-        Recupera las licitaciones con estado publicado (código definido en constantes).
-        Utiliza joinedload para cargar la relación 'estado' en memoria
-        y prevenir errores de sesión cerrada en la capa de vista.
-        """
         with self.session_factory() as sesion:
             try:
                 resultados = sesion.query(Licitacion)\
@@ -46,8 +38,8 @@ class RepositorioLicitaciones:
 
     def mover_licitacion(self, codigo_externo: str, nueva_etapa: str) -> bool:
         """
-        Transfiere una licitación específica hacia una nueva etapa del flujo 
-        (ej: 'candidata', 'seguimiento', 'ofertada').
+        Transfiere una licitación específica hacia una nueva etapa del flujo.
+        Se espera que 'nueva_etapa' provenga de EtapaLicitacion.XXX.value
         """
         with self.session_factory() as sesion:
             try:
@@ -63,16 +55,12 @@ class RepositorioLicitaciones:
                 return False
 
     def obtener_candidatas(self) -> list:
-        """
-        Recupera licitaciones con puntaje positivo que aún no han sido 
-        descartadas ni movidas a etapas superiores.
-        """
         with self.session_factory() as sesion:
             try:
                 resultados = sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
                     .filter(Licitacion.puntaje > UMBRAL_PUNTAJE_CANDIDATA)\
-                    .filter(or_(Licitacion.etapa == "candidata", Licitacion.etapa == None))\
+                    .filter(or_(Licitacion.etapa == EtapaLicitacion.CANDIDATA.value, Licitacion.etapa == None))\
                     .order_by(Licitacion.puntaje.desc())\
                     .limit(LIMITE_CANDIDATAS_VISIBLES).all()
                 return resultados
@@ -81,12 +69,11 @@ class RepositorioLicitaciones:
                 return []
 
     def obtener_seguimiento(self) -> list:
-        """Recupera el listado de licitaciones marcadas para seguimiento."""
         with self.session_factory() as sesion:
             try:
                 return sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
-                    .filter(Licitacion.etapa == "seguimiento")\
+                    .filter(Licitacion.etapa == EtapaLicitacion.SEGUIMIENTO.value)\
                     .order_by(Licitacion.puntaje.desc())\
                     .all()
             except Exception as e:
@@ -94,12 +81,11 @@ class RepositorioLicitaciones:
                 return []
 
     def obtener_ofertadas(self) -> list:
-        """Recupera el listado de licitaciones en las que ya se presentó oferta."""
         with self.session_factory() as sesion:
             try:
                 return sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
-                    .filter(Licitacion.etapa == "ofertada")\
+                    .filter(Licitacion.etapa == EtapaLicitacion.OFERTADA.value)\
                     .order_by(Licitacion.puntaje.desc())\
                     .all()
             except Exception as e:
@@ -107,10 +93,6 @@ class RepositorioLicitaciones:
                 return []
 
     def obtener_licitacion_por_codigo(self, codigo_externo: str):
-        """
-        Obtiene el detalle completo de una licitación, incluyendo las entidades 
-        relacionadas (estado y organismo) para su visualización en la ficha técnica.
-        """
         with self.session_factory() as sesion:
             try:
                 return sesion.query(Licitacion)\

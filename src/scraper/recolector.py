@@ -22,8 +22,8 @@ class RecolectorMercadoPublico:
         self.ultima_peticion = 0.0
         
         # Configuración de resiliencia (Backoff)
-        self.max_intentos = 5 
-        self.base_retraso = 2 
+        self.max_intentos = 4
+        self.base_retraso = 1.5
 
         if not self.ticket:
             logger.error("[CRITICAL] TICKET_MERCADO_PUBLICO no está configurado.")
@@ -57,7 +57,7 @@ class RecolectorMercadoPublico:
         self._esperar_limite_tasa()
 
         try:
-            respuesta = requests.get(self.url_base, params=parametros, timeout=30)
+            respuesta = requests.get(self.url_base, params=parametros, timeout=15)
             respuesta.raise_for_status()
             datos = respuesta.json()
 
@@ -94,7 +94,7 @@ class RecolectorMercadoPublico:
         for intento in range(self.max_intentos):
             try:
                 self._esperar_limite_tasa()
-                respuesta = requests.get(self.url_base, params=parametros, headers=cabeceras, timeout=30)
+                respuesta = requests.get(self.url_base, params=parametros, headers=cabeceras, timeout=15)
                 
                 if respuesta.status_code == 200:
                     datos = respuesta.json()

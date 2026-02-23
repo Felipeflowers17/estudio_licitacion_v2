@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import QMenu
 from PySide6.QtCore import Qt
+from src.config.constantes import EtapaLicitacion
 from src.UI.widgets.tab_listado_base import TabListadoBase
 
 class TabSeguimiento(TabListadoBase):  
@@ -26,6 +27,6 @@ class TabSeguimiento(TabListadoBase):
         codigo = self.tabla.item(fila, 1).text()
         
         if accion_seleccionada == accion_candidata:
-            self.mover_etapa(codigo, "candidata")
+            self.mover_etapa(codigo, EtapaLicitacion.CANDIDATA.value)
         elif accion_seleccionada == accion_ofertada:
-            self.mover_etapa(codigo, "ofertada")
+            self.mover_etapa(codigo, EtapaLicitacion.OFERTADA.value)

@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, 
                                QHeaderView, QMessageBox)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 from src.repositories.licitaciones_repository import RepositorioLicitaciones
 from src.UI.widgets.tab_detalle_licitacion import DialogoDetalleLicitacion
@@ -10,11 +10,18 @@ class TabListadoBase(QWidget):
     Clase padre que concentra la lógica estructural y visual de las tablas de licitaciones.
     Implementa el principio DRY para evitar código duplicado en las vistas derivadas.
     """
+    
+    # Señal de transmisión: Avisará a la ventana principal cuando un registro cambie de etapa
+    datos_actualizados_global = Signal()
+
     def __init__(self):
         super().__init__()
         self.layout_principal = QVBoxLayout(self)
         self.layout_principal.setContentsMargins(20, 20, 20, 20) 
         self.repositorio = RepositorioLicitaciones()
+        
+        # Patrón Dirty Flag: Asumimos que al inicio los datos deben cargarse
+        self.necesita_actualizacion = True
         
         self.tabla = QTableWidget()
         self.configurar_tabla()
@@ -37,8 +44,14 @@ class TabListadoBase(QWidget):
         item_codigo = self.tabla.item(fila, 1) 
         if item_codigo:
             codigo = item_codigo.text()
-            dialogo = DialogoDetalleLicitacion(codigo, self)
-            dialogo.exec()
+            
+            licitacion_completa = self.repositorio.obtener_licitacion_por_codigo(codigo)
+            
+            if licitacion_completa:
+                dialogo = DialogoDetalleLicitacion(licitacion_completa, self)
+                dialogo.exec()
+            else:
+                QMessageBox.warning(self, "Error de Datos", f"No fue posible recuperar los detalles de la licitación {codigo}.")
 
     def poblar_tabla(self, licitaciones: list, color_puntaje: Qt.GlobalColor):
         """Llena la cuadrícula con los datos inyectados por la clase hija."""
@@ -61,14 +74,26 @@ class TabListadoBase(QWidget):
             estado = licitacion.estado.descripcion if licitacion.estado else str(licitacion.codigo_estado)
             self.tabla.setItem(fila, 4, QTableWidgetItem(estado))
 
+        # Una vez poblada la tabla, marcamos que los datos ya están frescos
+        self.necesita_actualizacion = False
+
     def mover_etapa(self, codigo: str, nueva_etapa: str):
         if self.repositorio.mover_licitacion(codigo, nueva_etapa):
-            self.cargar_datos()
+            # 1. Recargamos la pestaña actual para que el registro desaparezca
+            self.cargar_datos() 
+            # 2. Emitimos la señal para informar al sistema que hubo un movimiento
+            self.datos_actualizados_global.emit()
         else:
             QMessageBox.warning(self, "Error de Sistema", f"No fue posible actualizar el registro {codigo}.")
             
     def actualizar_datos(self):
-        self.cargar_datos()
+        """Método de entrada al cambiar de pestaña. Evaluación condicional."""
+        if self.necesita_actualizacion:
+            self.cargar_datos()
+
+    def marcar_como_desactualizada(self):
+        """Permite que el sistema externo ensucie la bandera de esta vista."""
+        self.necesita_actualizacion = True
 
     # Métodos abstractos que deben ser implementados por las clases hijas
     def cargar_datos(self):

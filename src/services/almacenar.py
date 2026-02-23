@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from src.bd.database import SessionLocal
 from src.bd.models import Licitacion, EstadoLicitacion, Organismo
 from src.utils.logger import configurar_logger
+from src.config.constantes import EtapaLicitacion
 
 logger = configurar_logger("almacenador_bd")
 
@@ -95,7 +96,10 @@ class AlmacenadorLicitaciones:
             if not texto_fecha:
                 return None
             try:
-                return datetime.strptime(texto_fecha, "%Y-%m-%dT%H:%M:%S")
+                # Reemplazamos la 'Z' (Zulu time/UTC) por '+00:00' para que fromisoformat lo entienda,
+                # lo que nos protege si la API gubernamental actualiza su formato de salida.
+                texto_limpio = texto_fecha.replace("Z", "+00:00")
+                return datetime.fromisoformat(texto_limpio)
             except ValueError:
                 logger.warning(f"Formato de fecha no reconocido: '{texto_fecha}'")
                 return None
@@ -145,17 +149,11 @@ class AlmacenadorLicitaciones:
         return "\n".join(lineas)
 
     def _extraer_metadatos(self, datos: dict) -> dict:
-        """
-        Centraliza la extracción de las claves privadas (_) que el orquestador
-        inyecta en el diccionario para comunicar resultados del análisis.
-        
-        Usar este método evita que las claves mágicas estén dispersas por el código.
-        """
         return {
             "puntaje": datos.get("_PuntajeCalculado", 0),
             "tiene_detalle": datos.get("_TieneDetalle", False),
             "justificacion": datos.get("_Justificacion", ""),
-            "etapa": datos.get("_EtapaAsignada", "ignorada"),
+            "etapa": datos.get("_EtapaAsignada", EtapaLicitacion.IGNORADA.value),
         }
 
     # =========================================================================
@@ -248,8 +246,8 @@ class AlmacenadorLicitaciones:
             registro.tiene_detalle = True
 
         # Regla de ascenso de etapa (nunca retrocede una etapa manualmente asignada)
-        if registro.etapa == "ignorada" and metadatos["etapa"] == "candidata":
-            registro.etapa = "candidata"
+        if registro.etapa == EtapaLicitacion.IGNORADA.value and metadatos["etapa"] == EtapaLicitacion.CANDIDATA.value:
+            registro.etapa = EtapaLicitacion.CANDIDATA.value
 
     def _crear_registro(self, codigo_externo: str, datos: dict,
                          datos_comprador: dict, fechas: dict,

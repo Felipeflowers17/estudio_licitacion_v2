@@ -8,7 +8,8 @@ from src.config.constantes import (
     LIMITE_LICITACIONES_ACTIVAS,
     LIMITE_CANDIDATAS_VISIBLES,
     UMBRAL_PUNTAJE_CANDIDATA,
-    EtapaLicitacion
+    EtapaLicitacion,
+    TAMANIO_PAGINA_TABLAS
 )
 
 logger = configurar_logger("repositorio_licitaciones")
@@ -54,42 +55,45 @@ class RepositorioLicitaciones:
                 logger.error(f"Error al mover la licitación {codigo_externo} a {nueva_etapa}: {e}")
                 return False
 
-    def obtener_candidatas(self) -> list:
+    def obtener_candidatas(self, limit=TAMANIO_PAGINA_TABLAS, offset=0) -> list:
+        """Recupera licitaciones candidatas con soporte para paginación."""
         with self.session_factory() as sesion:
             try:
-                resultados = sesion.query(Licitacion)\
+                # Aplicamos filtros de puntaje y etapa, ordenando por relevancia
+                return sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
                     .filter(Licitacion.puntaje > UMBRAL_PUNTAJE_CANDIDATA)\
                     .filter(or_(Licitacion.etapa == EtapaLicitacion.CANDIDATA.value, Licitacion.etapa == None))\
                     .order_by(Licitacion.puntaje.desc())\
-                    .limit(LIMITE_CANDIDATAS_VISIBLES).all()
-                return resultados
+                    .limit(limit).offset(offset).all()
             except Exception as e:
-                logger.error(f"Error obteniendo candidatas: {e}")
+                logger.error(f"Error obteniendo candidatas paginadas: {e}")
                 return []
 
-    def obtener_seguimiento(self) -> list:
+    def obtener_seguimiento(self, limit=TAMANIO_PAGINA_TABLAS, offset=0) -> list:
+        """Recupera licitaciones en seguimiento con soporte para paginación."""
         with self.session_factory() as sesion:
             try:
                 return sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
                     .filter(Licitacion.etapa == EtapaLicitacion.SEGUIMIENTO.value)\
                     .order_by(Licitacion.puntaje.desc())\
-                    .all()
+                    .limit(limit).offset(offset).all()
             except Exception as e:
-                logger.error(f"Error obteniendo licitaciones en seguimiento: {e}")
+                logger.error(f"Error obteniendo licitaciones en seguimiento (paginación): {e}")
                 return []
 
-    def obtener_ofertadas(self) -> list:
+    def obtener_ofertadas(self, limit=TAMANIO_PAGINA_TABLAS, offset=0) -> list:
+        """Recupera licitaciones ofertadas con soporte para paginación."""
         with self.session_factory() as sesion:
             try:
                 return sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
                     .filter(Licitacion.etapa == EtapaLicitacion.OFERTADA.value)\
                     .order_by(Licitacion.puntaje.desc())\
-                    .all()
+                    .limit(limit).offset(offset).all()
             except Exception as e:
-                logger.error(f"Error obteniendo licitaciones ofertadas: {e}")
+                logger.error(f"Error obteniendo licitaciones ofertadas (paginación): {e}")
                 return []
 
     def obtener_licitacion_por_codigo(self, codigo_externo: str):

@@ -24,7 +24,7 @@ class DialogoIngresoManual(QDialog):
         # Campo para el Código
         self.layout_principal.addWidget(QLabel("Código Externo de la Licitación:"))
         self.input_codigo = QLineEdit()
-        self.input_codigo.setPlaceholderText("Ejemplo: 1234-56-LE24")
+        self.input_codigo.setPlaceholderText("Ejemplo: 1234-56-LE24 o 1464-74-L125")
         self.layout_principal.addWidget(self.input_codigo)
 
         # Etiqueta de error de validación (oculta por defecto)
@@ -58,13 +58,14 @@ class DialogoIngresoManual(QDialog):
         Valida el formato del código antes de cerrar el diálogo.
         
         El formato esperado es el estándar de Mercado Público Chile:
-        NNNN-NN-XXYY donde XX son letras y YY son dígitos del año.
-        Ejemplos válidos: 1234-56-LE24, 9876-1-LP2024, 1111-22-LQ23
+        NNNN-NN-XXXX donde XXXX es una combinación alfanumérica que incluye 
+        el tipo de licitación y el año.
         """
         codigo = self.input_codigo.text().strip()
 
-        # Regex: dígitos - dígitos - 2 letras mayúsculas + dígitos del año
-        patron_valido = r'^\d+-\d+-[A-Z]{2}\d+$'
+        # Regex flexible: dígitos - dígitos - combinación de letras y números (Alfanumérico)
+        # Esto permite tipos como L1, B2, CI2, DC2 detectados en la plataforma.
+        patron_valido = r'^\d+-\d+-[A-Z0-9]+$'
 
         if not codigo:
             self.etiqueta_error.setText("El código no puede estar vacío.")
@@ -73,7 +74,7 @@ class DialogoIngresoManual(QDialog):
 
         if not re.match(patron_valido, codigo):
             self.etiqueta_error.setText(
-                "Formato inválido. Use el formato estándar: NNNN-NN-LEAA  (ej: 1234-56-LE24)"
+                "Formato inválido. Use el formato estándar de Mercado Público (ej: 1464-74-L125)"
             )
             self.etiqueta_error.setVisible(True)
             return

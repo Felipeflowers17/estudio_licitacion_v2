@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 from src.services.calculadora import CalculadoraPuntajes
-from src.bd.models import PalabraClave, Organismo
+from src.bd.models import PalabraClave
 
 
 class TestCalculadoraPuntajes(unittest.TestCase):
@@ -38,8 +38,8 @@ class TestCalculadoraPuntajes(unittest.TestCase):
 
         calc = CalculadoraPuntajes()
 
-        self.assertEqual(len(calc.reglas_en_memoria), 2, "Debería haber cargado 2 reglas")
-        print("\n✅ Test de Carga de Reglas: PASADO")
+        self.assertEqual(len(calc.reglas_compiladas), 2, "Debería haber cargado 2 reglas precompiladas")
+        print("\nTest de Carga de Reglas: PASADO")
 
     @patch('src.services.calculadora.SessionLocal')
     def test_evaluar_titulo(self, mock_session_local):
@@ -62,45 +62,29 @@ class TestCalculadoraPuntajes(unittest.TestCase):
         self.assertEqual(puntaje, 30, f"El puntaje debió ser 30, fue {puntaje}")
         self.assertTrue(any("Silla" in m for m in motivos))
         self.assertTrue(any("Mesa" in m for m in motivos))
-        print("✅ Test de Evaluación de Título: PASADO")
+        print("Test de Evaluación de Título: PASADO")
 
     @patch('src.services.calculadora.SessionLocal')
-    def test_evaluar_detalle_organismo(self, mock_session_local):
+    def test_evaluar_detalle(self, mock_session_local):
         """
-        Probamos que sume puntos si el organismo es VIP.
-        
-        Corrección respecto a la versión anterior:
-        Se usa side_effect para separar la respuesta de .all() (palabras clave)
-        de la respuesta de .filter_by().first() (organismo). De esta forma,
-        ambas llamadas a query() son independientes y el test es robusto.
+        Probamos que sume puntos correctamente al analizar descripciones y productos.
+        La función ahora es pura y no depende de la base de datos de organismos.
         """
-        organismo_falso = Organismo(codigo="ORG-123", nombre="Muni Test", puntaje=100)
-
         mock_db = MagicMock()
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
-
-        # Separamos las dos consultas distintas que hace evaluar_detalle:
-        # - Primera llamada a query(): retorna las palabras clave via .all()
-        # - Segunda llamada a query(): retorna el organismo via .filter_by().first()
-        mock_query_palabras = MagicMock()
-        mock_query_palabras.all.return_value = self.datos_falsos_bd
-
-        mock_query_organismo = MagicMock()
-        mock_query_organismo.filter_by.return_value.first.return_value = organismo_falso
-
-        # side_effect hace que cada llamada consecutiva a query() use el siguiente valor
-        mock_db.query.side_effect = [mock_query_palabras, mock_query_organismo]
-
+        mock_db.query.return_value.all.return_value = self.datos_falsos_bd
         mock_session_local.return_value = mock_db
 
         calc = CalculadoraPuntajes()
 
-        puntaje, motivos = calc.evaluar_detalle("ORG-123", "", "")
+        # Evaluamos descripción con "Mesa" (10 pts) y producto con "Silla" (1 pt)
+        puntaje, motivos = calc.evaluar_detalle(descripcion="Se requiere una Mesa amplia", texto_productos="Silla de madera")
 
-        self.assertEqual(puntaje, 100, "El puntaje debió ser 100 por el organismo")
-        self.assertIn("Muni Test", motivos[0])
-        print("✅ Test de Organismo: PASADO")
+        self.assertEqual(puntaje, 11, "El puntaje debió ser 11 (10 por mesa en desc, 1 por silla en prod)")
+        self.assertTrue(any("Mesa" in m for m in motivos))
+        self.assertTrue(any("Silla" in m for m in motivos))
+        print("Test de Evaluación de Detalles Puros: PASADO")
 
     @patch('src.services.calculadora.SessionLocal')
     def test_insensibilidad_mayusculas(self, mock_session_local):
@@ -119,7 +103,7 @@ class TestCalculadoraPuntajes(unittest.TestCase):
         puntaje, motivos = calc.evaluar_titulo(titulo)
 
         self.assertEqual(puntaje, 10, "No detectó la palabra en mayúsculas")
-        print("✅ Test Mayúsculas/Minúsculas: PASADO")
+        print("Test Mayúsculas/Minúsculas: PASADO")
 
     @patch('src.services.calculadora.SessionLocal')
     def test_manejo_valores_nulos(self, mock_session_local):
@@ -130,24 +114,16 @@ class TestCalculadoraPuntajes(unittest.TestCase):
         mock_db = MagicMock()
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
-
-        # Para este test no hay organismo, la segunda query retorna None
-        mock_query_palabras = MagicMock()
-        mock_query_palabras.all.return_value = self.datos_falsos_bd
-
-        mock_query_organismo = MagicMock()
-        mock_query_organismo.filter_by.return_value.first.return_value = None
-
-        mock_db.query.side_effect = [mock_query_palabras, mock_query_organismo]
+        mock_db.query.return_value.all.return_value = self.datos_falsos_bd
         mock_session_local.return_value = mock_db
 
         calc = CalculadoraPuntajes()
 
         try:
-            puntaje, motivos = calc.evaluar_detalle("ORG-XYZ", None, None)
+            puntaje, motivos = calc.evaluar_detalle(None, None)
             self.assertEqual(puntaje, 0)
             self.assertEqual(motivos, [])
-            print("✅ Test Valores Nulos (None): PASADO")
+            print("Test Valores Nulos (None): PASADO")
         except AttributeError:
             self.fail("La calculadora falló al recibir None (posible error de .lower() en un NoneType)")
 

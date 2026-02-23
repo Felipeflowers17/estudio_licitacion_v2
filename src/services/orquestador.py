@@ -7,6 +7,9 @@ from src.repositories.licitaciones_repository import RepositorioLicitaciones
 from src.services.instancias import calculadora_compartida
 from src.utils.logger import configurar_logger
 from src.config.constantes import PAUSA_ENTRE_DIAS_EXTRACCION, UMBRAL_PUNTAJE_CANDIDATA, EtapaLicitacion
+from src.services.transformador_api import TransformadorAPI
+from src.bd.database import SessionLocal
+from src.bd.models import Organismo
 
 logger = configurar_logger("orquestador_ingesta")
 
@@ -30,6 +33,18 @@ class OrquestadorIngesta:
         self.repositorio = RepositorioLicitaciones()
         # Usamos la referencia a la instancia compartida, no una nueva instancia.
         self.calculadora = calculadora_compartida
+        # Caché local para evitar consultas N+1 a la base de datos
+        self.cache_organismos = {}
+
+    def _cargar_cache_organismos(self) -> dict:
+        """Carga en RAM los puntajes de los organismos para evitar consultas N+1."""
+        with SessionLocal() as sesion:
+            try:
+                organismos = sesion.query(Organismo).all()
+                return {org.codigo: org.puntaje for org in organismos}
+            except Exception as e:
+                logger.error(f"Error cargando caché de organismos: {e}")
+                return {}
 
     # =========================================================================
     # PROCESAMIENTO MANUAL (Una sola licitación por código)
@@ -45,6 +60,10 @@ class OrquestadorIngesta:
                 callback_progreso(mensaje)
 
         try:
+            # Aseguramos que la caché esté disponible incluso para procesos manuales
+            if not self.cache_organismos:
+                self.cache_organismos = self._cargar_cache_organismos()
+
             emitir("Consultando API de Mercado Público...")
             resultado = self.recolector.obtener_detalle_licitacion(codigo)
 
@@ -60,22 +79,50 @@ class OrquestadorIngesta:
             titulo = datos_api.get("Nombre", "")
             puntaje_inicial, motivos = self.calculadora.evaluar_titulo(titulo)
 
-            cod_org = datos_api.get("Comprador", {}).get("CodigoOrganismo", "")
+            comprador = datos_api.get("Comprador", {})
+            cod_org = comprador.get("CodigoOrganismo", "")
             desc = datos_api.get("Descripcion", "")
             items_str = self._extraer_texto_items(datos_api)
 
+            # Evaluación de detalle (función pura)
             puntaje_detalle, motivos_detalle = self.calculadora.evaluar_detalle(
-                cod_org, desc, items_str
+                desc, items_str
             )
 
-            datos_api["_PuntajeCalculado"] = puntaje_inicial + puntaje_detalle
-            datos_api["_TieneDetalle"] = True
-            datos_api["_EstadoDescarga"] = "exitoso_manual"
-            datos_api["_Justificacion"] = "\n".join(motivos + motivos_detalle)
-            datos_api["_EtapaAsignada"] = etapa_destino
+            # Sumatoria final incluyendo el puntaje del organismo desde caché
+            puntaje_org_cache = self.cache_organismos.get(cod_org, 0)
+            puntaje_total = puntaje_inicial + puntaje_detalle + puntaje_org_cache
+
+            motivos_completos = motivos + motivos_detalle
+            if puntaje_org_cache != 0:
+                motivos_completos.append(f"[MATCH ORGANISMO] Puntaje institucional ({puntaje_org_cache:+d})")
+
+            # Transformación de datos para el formato de BD
+            fechas = TransformadorAPI.parsear_fechas(datos_api)
+            texto_productos = TransformadorAPI.construir_texto_productos(datos_api)
+
+            registro_db = {
+                "codigo_externo": codigo,
+                "nombre": titulo,
+                "descripcion": desc,
+                "puntaje": puntaje_total,
+                "justificacion_puntaje": "\n".join(motivos_completos),
+                "etapa": etapa_destino,
+                "detalle_productos": texto_productos,
+                "fecha_cierre": fechas["cierre"],
+                "fecha_inicio": fechas["inicio"],
+                "fecha_publicacion": fechas["publicacion"],
+                "fecha_adjudicacion": fechas["adjudicacion"],
+                "codigo_estado": datos_api.get("CodigoEstado"),
+                "codigo_organismo": cod_org,
+                "tiene_detalle": True,
+                # Campos auxiliares para asegurar dependencias en el almacenador
+                "_nombre_organismo": comprador.get("NombreOrganismo", "Desconocido"),
+                "_descripcion_estado": datos_api.get("Estado", "Desconocido")
+            }
 
             emitir("Guardando en base de datos...")
-            self.almacenador.guardar_licitacion_individual(datos_api)
+            self.almacenador.guardar_licitacion_individual(registro_db)
             self.repositorio.mover_licitacion(codigo, etapa_destino)
 
             return True, f"La licitación '{codigo}' fue procesada y movida a '{etapa_destino}' exitosamente."
@@ -110,6 +157,10 @@ class OrquestadorIngesta:
             'detalles_omitidos': 0,
             'errores': 0
         }
+
+        # CARGA DE CACHÉ INICIAL: Evita miles de consultas SELECT durante el proceso
+        emitir("[SISTEMA] Sincronizando directorio de organismos en memoria...")
+        self.cache_organismos = self._cargar_cache_organismos()
 
         dias_totales = (fecha_fin - fecha_inicio).days + 1
         emitir(f"[INFO] Iniciando proceso para {dias_totales} día(s).")
@@ -164,7 +215,7 @@ class OrquestadorIngesta:
     def _procesar_listado_diario(self, licitaciones: list, total_dia: int,
                                   emitir, debe_continuar) -> dict:
         """
-        Procesa cada licitación de un día: evalúa, descarga detalle si aplica y persiste.
+        Procesa cada licitación de un día: evalúa, descarga detalle si aplica y persiste por lotes.
         """
         stats = {
             'detalles_exitosos': 0,
@@ -173,23 +224,75 @@ class OrquestadorIngesta:
             'errores': 0
         }
 
+        lote_licitaciones = []
+        lote_organismos = []
+        lote_estados = []
+        
+        # Sets de control para evitar duplicados dentro del mismo lote de inserción
+        codigos_org_lote = set()
+        codigos_est_lote = set()
+
         for idx, item in enumerate(licitaciones, 1):
             if not debe_continuar():
                 break
 
             if idx % 20 == 0:
-                emitir(f"   [AVANCE] Procesando {idx}/{total_dia}...")
+                emitir(f"   [AVANCE] Evaluando {idx}/{total_dia}...")
 
-            datos_finales, stats_item = self._procesar_item_individual(item, emitir)
+            datos_api, stats_item = self._procesar_item_individual(item, emitir)
 
             for clave in stats_item:
                 stats[clave] += stats_item[clave]
 
-            try:
-                self.almacenador.guardar_licitacion_individual(datos_finales)
-            except Exception as e:
-                emitir(f"   [ERROR BD] Fallo en persistencia: {str(e)[:80]}")
-                stats['errores'] += 1
+            # TRANSFORMACIÓN Y PREPARACIÓN PARA PERSISTENCIA MASIVA
+            fechas = TransformadorAPI.parsear_fechas(datos_api)
+            texto_productos = TransformadorAPI.construir_texto_productos(datos_api)
+            
+            comprador = datos_api.get("Comprador", {})
+            cod_org = comprador.get("CodigoOrganismo")
+            cod_est = datos_api.get("CodigoEstado")
+
+            registro_db = {
+                "codigo_externo": datos_api.get("CodigoExterno"),
+                "nombre": datos_api.get("Nombre"),
+                "descripcion": datos_api.get("Descripcion"),
+                "puntaje": datos_api.get("_PuntajeCalculado", 0),
+                "justificacion_puntaje": datos_api.get("_Justificacion", ""),
+                "etapa": datos_api.get("_EtapaAsignada", EtapaLicitacion.IGNORADA.value),
+                "detalle_productos": texto_productos,
+                "fecha_cierre": fechas["cierre"],
+                "fecha_inicio": fechas["inicio"],
+                "fecha_publicacion": fechas["publicacion"],
+                "fecha_adjudicacion": fechas["adjudicacion"],
+                "codigo_estado": cod_est,
+                "codigo_organismo": cod_org,
+                "tiene_detalle": datos_api.get("_TieneDetalle", False)
+            }
+            lote_licitaciones.append(registro_db)
+
+            # Acumulación de entidades relacionadas para Bulk Insert
+            if cod_org and cod_org not in codigos_org_lote:
+                lote_organismos.append({
+                    "codigo": cod_org, 
+                    "nombre": comprador.get("NombreOrganismo", "Desconocido")
+                })
+                codigos_org_lote.add(cod_org)
+                
+            if cod_est and cod_est not in codigos_est_lote:
+                lote_estados.append({
+                    "codigo": cod_est, 
+                    "descripcion": datos_api.get("Estado", "Desconocido")
+                })
+                codigos_est_lote.add(cod_est)
+
+        # PERSISTENCIA VECTORIZADA: Se ejecuta una única transacción para todo el día
+        try:
+            if lote_licitaciones:
+                emitir("   [BASE DE DATOS] Sincronizando lote diario con PostgreSQL...")
+                self.almacenador.guardar_lote_masivo(lote_licitaciones, lote_organismos, lote_estados)
+        except Exception as e:
+            emitir(f"   [ERROR CRÍTICO] Fallo en persistencia masiva: {str(e)[:80]}")
+            stats['errores'] += 1
 
         return stats
 
@@ -209,7 +312,6 @@ class OrquestadorIngesta:
         tiene_detalle = False
         puntaje_final = puntaje_inicial
         estado_descarga = "sin_intentar"
-        # Iniciamos con el valor seguro del Enum
         etapa_asignada = EtapaLicitacion.IGNORADA.value
 
         if puntaje_inicial <= UMBRAL_PUNTAJE_CANDIDATA:
@@ -228,15 +330,24 @@ class OrquestadorIngesta:
                 stats['detalles_exitosos'] += 1
                 estado_descarga = "exitoso"
 
-                cod_org = detalle.get("Comprador", {}).get("CodigoOrganismo", "")
+                comprador = detalle.get("Comprador", {})
+                cod_org = comprador.get("CodigoOrganismo", "")
                 desc = detalle.get("Descripcion", "")
                 items_str = self._extraer_texto_items(detalle)
 
+                # EVALUACIÓN LÉXICA PURA
                 puntaje_detalle, motivos_detalle = self.calculadora.evaluar_detalle(
-                    cod_org, desc, items_str
+                    desc, items_str
                 )
-                puntaje_final = puntaje_inicial + puntaje_detalle
+                
+                # INTEGRACIÓN DE PUNTAJE DESDE CACHÉ DE MEMORIA
+                puntaje_org_cache = self.cache_organismos.get(cod_org, 0)
+                
+                puntaje_final = puntaje_inicial + puntaje_detalle + puntaje_org_cache
                 motivos.extend(motivos_detalle)
+                
+                if puntaje_org_cache != 0:
+                    motivos.append(f"[MATCH ORGANISMO] Puntaje institucional ({puntaje_org_cache:+d})")
                 
                 # Asignación de etapa utilizando Enums
                 if puntaje_final > UMBRAL_PUNTAJE_CANDIDATA:

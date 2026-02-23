@@ -1,16 +1,16 @@
 from PySide6.QtWidgets import QMenu
 from PySide6.QtCore import Qt
-from src.config.constantes import EtapaLicitacion
+from src.config.constantes import TAMANIO_PAGINA_TABLAS, EtapaLicitacion
 from src.UI.widgets.tab_listado_base import TabListadoBase
 
 class TabSeguimiento(TabListadoBase):  
     """Vista operativa para las licitaciones marcadas para evaluación profunda o seguimiento."""
     def __init__(self):
         super().__init__()
-        self.cargar_datos()
 
     def cargar_datos(self):
-        licitaciones = self.repositorio.obtener_seguimiento()
+        desplazamiento = self.pagina_actual * TAMANIO_PAGINA_TABLAS
+        licitaciones = self.repositorio.obtener_seguimiento(offset=desplazamiento)
         self.poblar_tabla(licitaciones, Qt.blue)
 
     def mostrar_menu_contextual(self, posicion):

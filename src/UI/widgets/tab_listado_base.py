@@ -1,9 +1,10 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, 
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, 
                                QHeaderView, QMessageBox)
 from PySide6.QtCore import Qt, Signal
 
 from src.repositories.licitaciones_repository import RepositorioLicitaciones
 from src.UI.widgets.tab_detalle_licitacion import DialogoDetalleLicitacion
+from src.config.constantes import TAMANIO_PAGINA_TABLAS
 
 class TabListadoBase(QWidget):
     """
@@ -20,12 +21,58 @@ class TabListadoBase(QWidget):
         self.layout_principal.setContentsMargins(20, 20, 20, 20) 
         self.repositorio = RepositorioLicitaciones()
         
-        # Patrón Dirty Flag: Asumimos que al inicio los datos deben cargarse
+        # Estado de paginación
+        self.pagina_actual = 0
         self.necesita_actualizacion = True
         
         self.tabla = QTableWidget()
         self.configurar_tabla()
         self.layout_principal.addWidget(self.tabla)
+
+        # Controles de navegación de página
+        self.crear_barra_paginacion()
+
+    def crear_barra_paginacion(self):
+        """Construye la botonera inferior para navegar entre páginas de resultados."""
+        layout_paginacion = QHBoxLayout()
+        layout_paginacion.addStretch()
+
+        self.boton_anterior = QPushButton("Página Anterior")
+        self.boton_anterior.setFixedWidth(120)
+        self.boton_anterior.setEnabled(False)
+        self.boton_anterior.clicked.connect(self.ir_pagina_anterior)
+
+        self.etiqueta_pagina = QLabel("Página: 1")
+        self.etiqueta_pagina.setStyleSheet("font-weight: bold; padding: 0 10px;")
+
+        self.boton_siguiente = QPushButton("Página Siguiente")
+        self.boton_siguiente.setFixedWidth(120)
+        self.boton_siguiente.clicked.connect(self.ir_pagina_siguiente)
+
+        layout_paginacion.addWidget(self.boton_anterior)
+        layout_paginacion.addWidget(self.etiqueta_pagina)
+        layout_paginacion.addWidget(self.boton_siguiente)
+        
+        self.layout_principal.addLayout(layout_paginacion)
+
+    def ir_pagina_siguiente(self):
+        self.pagina_actual += 1
+        self.cargar_datos()
+        self.actualizar_estado_paginacion()
+
+    def ir_pagina_anterior(self):
+        if self.pagina_actual > 0:
+            self.pagina_actual -= 1
+            self.cargar_datos()
+            self.actualizar_estado_paginacion()
+    
+    def actualizar_estado_paginacion(self):
+        """Refresca las etiquetas y el estado de los botones de navegación."""
+        self.etiqueta_pagina.setText(f"Página: {self.pagina_actual + 1}")
+        self.boton_anterior.setEnabled(self.pagina_actual > 0)
+        
+        # Si la tabla tiene menos registros que el tamaño de página, asumimos que es la última
+        self.boton_siguiente.setEnabled(self.tabla.rowCount() == TAMANIO_PAGINA_TABLAS)
 
     def configurar_tabla(self):
         columnas = ["Puntaje", "Código Externo", "Nombre de Licitación", "Fecha de Cierre", "Estado"]
@@ -89,7 +136,10 @@ class TabListadoBase(QWidget):
     def actualizar_datos(self):
         """Método de entrada al cambiar de pestaña. Evaluación condicional."""
         if self.necesita_actualizacion:
+            # Al forzar una actualización desde fuera (movimiento de etapa), reiniciamos a página 0
+            self.pagina_actual = 0
             self.cargar_datos()
+            self.actualizar_estado_paginacion()
 
     def marcar_como_desactualizada(self):
         """Permite que el sistema externo ensucie la bandera de esta vista."""

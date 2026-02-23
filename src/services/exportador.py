@@ -4,7 +4,7 @@ import pandas as pd
 from src.bd.database import SessionLocal
 from src.bd.models import Licitacion, PalabraClave, Organismo
 from src.utils.logger import configurar_logger
-from src.config.constantes import EtapaLicitacion
+from src.config.constantes import EtapaLicitacion, TAMANIO_CHUNK_EXPORTACION
 
 logger = configurar_logger("servicio_exportador")
 
@@ -12,16 +12,17 @@ class ServicioExportador:
     """
     Gestiona la exportación de información desde la base de datos hacia 
     formatos de archivo plano (CSV) y hojas de cálculo (Excel).
+    
+    Implementa procesamiento por lotes (Chunking) para garantizar un
+    consumo de memoria RAM constante y prevenir bloqueos del sistema.
     """
 
     def __init__(self, session_factory=SessionLocal):
-        """Inyección de dependencia para asegurar aislamiento en pruebas unitarias."""
         self.session_factory = session_factory
 
     def generar_reporte(self, opciones: dict, directorio_destino: str) -> tuple:
         """
         Orquesta el proceso de exportación basado en las selecciones del usuario.
-        Retorna una tupla con un booleano de éxito y un mensaje descriptivo.
         """
         marca_tiempo = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         carpeta_final = os.path.join(directorio_destino, f"Reporte_Licitaciones_{marca_tiempo}")
@@ -29,66 +30,79 @@ class ServicioExportador:
         try:
             os.makedirs(carpeta_final, exist_ok=True)
         except OSError as error_so:
-            logger.error(f"Error del sistema operativo al crear carpeta: {error_so}")
-            return False, f"Error creando el directorio de destino: {error_so}"
+            logger.error(f"Error al crear carpeta: {error_so}")
+            return False, f"Error creando el directorio: {error_so}"
 
-        # Mantenemos la conexión a la base de datos abierta de forma segura durante 
-        # todo el ciclo de iteración de reportes
         with self.session_factory() as sesion:
             try:
-                # Bloque 1: Exportación de Licitaciones filtradas usando Enums
-                if opciones.get('candidatas'):
-                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.CANDIDATA.value)
-                    self._exportar_consulta(sesion, "Candidatas", consulta, carpeta_final, opciones)
+                # Diccionario de mapeo: Entidad -> Consulta SQLAlchemy
+                consultas = {
+                    'candidatas': sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.CANDIDATA.value),
+                    'seguimiento': sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.SEGUIMIENTO.value),
+                    'ofertadas': sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.OFERTADA.value),
+                    'full_db': sesion.query(Licitacion)
+                }
 
-                if opciones.get('seguimiento'):
-                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.SEGUIMIENTO.value)
-                    self._exportar_consulta(sesion, "Seguimiento", consulta, carpeta_final, opciones)
+                for clave, consulta in consultas.items():
+                    if opciones.get(clave):
+                        self._procesar_exportacion_masiva(sesion, clave.capitalize(), consulta, carpeta_final, opciones)
 
-                if opciones.get('ofertadas'):
-                    consulta = sesion.query(Licitacion).filter(Licitacion.etapa == EtapaLicitacion.OFERTADA.value)
-                    self._exportar_consulta(sesion, "Ofertadas", consulta, carpeta_final, opciones)
-
-                if opciones.get('full_db'):
-                    consulta = sesion.query(Licitacion)
-                    self._exportar_consulta(sesion, "Base_Completa", consulta, carpeta_final, opciones)
-
-                # Bloque 2: Exportación de Reglas de Negocio
                 if opciones.get('reglas'):
-                    self._exportar_tabla_generica(sesion, "Reglas_Palabras", PalabraClave, carpeta_final, opciones)
-                    self._exportar_tabla_generica(sesion, "Reglas_Organismos", Organismo, carpeta_final, opciones)
+                    self._procesar_exportacion_masiva(sesion, "Reglas_Palabras", sesion.query(PalabraClave), carpeta_final, opciones)
+                    self._procesar_exportacion_masiva(sesion, "Reglas_Organismos", sesion.query(Organismo), carpeta_final, opciones)
 
-                logger.info(f"Exportación finalizada con éxito en {carpeta_final}")
-                return True, f"Exportación exitosa. Archivos guardados en:\n{carpeta_final}"
+                return True, f"Exportación exitosa en:\n{carpeta_final}"
 
             except Exception as error_critico:
-                logger.error(f"Error crítico durante la exportación de datos: {error_critico}")
-                return False, f"Ocurrió un error inesperado durante la exportación: {error_critico}"
+                logger.error(f"Error crítico en exportación: {error_critico}")
+                return False, f"Falla inesperada: {error_critico}"
 
-    def _exportar_consulta(self, sesion, nombre_archivo: str, consulta, carpeta: str, opciones: dict):
-        """Ejecuta una consulta SQL, limpia los datos y los envía a archivo."""
-        dataframe = pd.read_sql(consulta.statement, sesion.connection())
-        
-        for columna in dataframe.select_dtypes(include=['datetimetz']).columns:
-            dataframe[columna] = dataframe[columna].dt.tz_localize(None)
+    def _procesar_exportacion_masiva(self, sesion, nombre: str, consulta, carpeta: str, opciones: dict):
+        """
+        Ejecuta la lectura incremental de la base de datos y delega la escritura.
+        """
+        # El parámetro chunksize convierte a read_sql en un generador de DataFrames
+        lector_chunks = pd.read_sql(
+            consulta.statement, 
+            sesion.connection(), 
+            chunksize=TAMANIO_CHUNK_EXPORTACION
+        )
 
-        self._guardar_archivos(dataframe, nombre_archivo, carpeta, opciones)
+        es_primer_bloque = True
+        ruta_base = os.path.join(carpeta, nombre)
 
-    def _exportar_tabla_generica(self, sesion, nombre_archivo: str, modelo, carpeta: str, opciones: dict):
-        """Exporta el contenido completo de una tabla de configuración."""
-        consulta = sesion.query(modelo)
-        dataframe = pd.read_sql(consulta.statement, sesion.connection())
-        self._guardar_archivos(dataframe, nombre_archivo, carpeta, opciones)
+        # Para Excel, debido a las limitaciones del formato, acumulamos de forma controlada
+        # Para CSV, escribimos de forma incremental directamente en el disco
+        datos_excel = [] if opciones.get('xlsx') else None
 
-    def _guardar_archivos(self, dataframe, nombre_base: str, carpeta: str, opciones: dict):
-        """Persiste el DataFrame en disco en los formatos solicitados."""
-        if dataframe.empty:
-            return 
+        for chunk in lector_chunks:
+            # Limpieza de zonas horarias para compatibilidad con Excel
+            for col in chunk.select_dtypes(include=['datetimetz']).columns:
+                chunk[col] = chunk[col].dt.tz_localize(None)
 
-        ruta_base = os.path.join(carpeta, nombre_base)
+            # Exportación incremental a CSV (Anexado al final del archivo)
+            if opciones.get('csv'):
+                self._escribir_csv_incremental(chunk, f"{ruta_base}.csv", es_primer_bloque)
+            
+            # Recolección para Excel
+            if datos_excel is not None:
+                datos_excel.append(chunk)
 
-        if opciones.get('xlsx'):
-            dataframe.to_excel(f"{ruta_base}.xlsx", index=False)
-        
-        if opciones.get('csv'):
-            dataframe.to_csv(f"{ruta_base}.csv", index=False, sep=';', encoding='utf-8-sig')
+            es_primer_bloque = False
+
+        # Escritura final de Excel (se ejecuta una sola vez al final del flujo de datos)
+        if datos_excel:
+            df_final = pd.concat(datos_excel, ignore_index=True)
+            df_final.to_excel(f"{ruta_base}.xlsx", index=False)
+            del df_final # Liberación explícita de memoria
+
+    def _escribir_csv_incremental(self, dataframe, ruta: str, incluir_cabecera: bool):
+        """Escribe el lote actual al final del archivo CSV sin cargar el resto del archivo."""
+        dataframe.to_csv(
+            ruta,
+            mode='a',             # Modo 'append' (anexar)
+            index=False,
+            sep=';',
+            encoding='utf-8-sig',
+            header=incluir_cabecera # Solo pone los títulos de columna en el primer bloque
+        )

@@ -1,7 +1,7 @@
 import re
 import threading
 from src.bd.database import SessionLocal
-from src.bd.models import PalabraClave, Organismo
+from src.bd.models import PalabraClave
 from src.utils.logger import configurar_logger
 
 logger = configurar_logger("calculadora_puntajes")
@@ -73,41 +73,36 @@ class CalculadoraPuntajes:
                     
         return puntaje_acumulado, registro_motivos
 
-    def evaluar_detalle(self, codigo_organismo: str, descripcion: str, texto_productos: str) -> tuple:
+    def evaluar_detalle(self, descripcion: str, texto_productos: str) -> tuple:
         """
-        Analiza descripción, productos y organismo utilizando patrones precompilados.
+        Analiza descripción y productos utilizando patrones precompilados.
+        Se ha removido la consulta a la base de datos para garantizar que esta
+        sea una función pura (CPU-bound) y mejorar el rendimiento.
         """
         puntaje_acumulado = 0
         registro_motivos = []
         
-        with self.session_factory() as sesion:
-            try:
-                if codigo_organismo:
-                    organismo_bd = sesion.query(Organismo).filter_by(codigo=codigo_organismo).first()
-                    if organismo_bd and organismo_bd.puntaje != 0:
-                        puntaje_acumulado += organismo_bd.puntaje
-                        registro_motivos.append(f"[MATCH ORGANISMO] {organismo_bd.nombre} ({organismo_bd.puntaje:+d})")
+        try:
+            desc_minusculas = descripcion.lower() if descripcion else ""
+            prod_minusculas = texto_productos.lower() if texto_productos else ""
 
-                desc_minusculas = descripcion.lower() if descripcion else ""
-                prod_minusculas = texto_productos.lower() if texto_productos else ""
+            # Bloque crítico: Copia rápida (shallow copy) para lectura segura
+            with self.cerrojo:
+                reglas_locales = list(self.reglas_compiladas)
 
-                # Bloque crítico: Copia rápida (shallow copy) para lectura segura
-                with self.cerrojo:
-                    reglas_locales = list(self.reglas_compiladas)
-
-                for regla, patron in reglas_locales:
-                    if regla.puntaje_descripcion != 0 and desc_minusculas:
-                        if patron.search(desc_minusculas):
-                            puntaje_acumulado += regla.puntaje_descripcion
-                            registro_motivos.append(f"[MATCH EXACTO DESC] '{regla.palabra}' ({regla.puntaje_descripcion:+d})")
-                    
-                    if regla.puntaje_productos != 0 and prod_minusculas:
-                        if patron.search(prod_minusculas):
-                            puntaje_acumulado += regla.puntaje_productos
-                            registro_motivos.append(f"[MATCH EXACTO PROD] '{regla.palabra}' ({regla.puntaje_productos:+d})")
-                            
-                return puntaje_acumulado, registro_motivos
+            for regla, patron in reglas_locales:
+                if regla.puntaje_descripcion != 0 and desc_minusculas:
+                    if patron.search(desc_minusculas):
+                        puntaje_acumulado += regla.puntaje_descripcion
+                        registro_motivos.append(f"[MATCH EXACTO DESC] '{regla.palabra}' ({regla.puntaje_descripcion:+d})")
                 
-            except Exception as error_evaluacion:
-                logger.error(f"Error al evaluar los detalles profundos: {error_evaluacion}")
-                return 0, []
+                if regla.puntaje_productos != 0 and prod_minusculas:
+                    if patron.search(prod_minusculas):
+                        puntaje_acumulado += regla.puntaje_productos
+                        registro_motivos.append(f"[MATCH EXACTO PROD] '{regla.palabra}' ({regla.puntaje_productos:+d})")
+                        
+            return puntaje_acumulado, registro_motivos
+            
+        except Exception as error_evaluacion:
+            logger.error(f"Error al evaluar los detalles profundos: {error_evaluacion}")
+            return 0, []

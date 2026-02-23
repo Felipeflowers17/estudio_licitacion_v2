@@ -1,16 +1,17 @@
 from PySide6.QtWidgets import QMenu
 from PySide6.QtCore import Qt
-from src.config.constantes import EtapaLicitacion
+from src.config.constantes import TAMANIO_PAGINA_TABLAS, EtapaLicitacion
 from src.UI.widgets.tab_listado_base import TabListadoBase
 
 class TabOfertadas(TabListadoBase):  
     """Vista de archivo y control para las licitaciones en las que ya se presentó oferta."""
     def __init__(self):
         super().__init__()
-        self.cargar_datos()
+        
 
     def cargar_datos(self):
-        licitaciones = self.repositorio.obtener_ofertadas()
+        desplazamiento = self.pagina_actual * TAMANIO_PAGINA_TABLAS
+        licitaciones = self.repositorio.obtener_ofertadas(offset=desplazamiento)
         self.poblar_tabla(licitaciones, Qt.darkMagenta)
 
     def mostrar_menu_contextual(self, posicion):

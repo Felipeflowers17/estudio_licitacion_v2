@@ -97,32 +97,14 @@ class OrquestadorIngesta:
             if puntaje_org_cache != 0:
                 motivos_completos.append(f"[MATCH ORGANISMO] Puntaje institucional ({puntaje_org_cache:+d})")
 
-            # Transformación de datos para el formato de BD
-            fechas = TransformadorAPI.parsear_fechas(datos_api)
-            texto_productos = TransformadorAPI.construir_texto_productos(datos_api)
-
-            registro_db = {
-                "codigo_externo": codigo,
-                "nombre": titulo,
-                "descripcion": desc,
-                "puntaje": puntaje_total,
-                "justificacion_puntaje": "\n".join(motivos_completos),
-                "etapa": etapa_destino,
-                "detalle_productos": texto_productos,
-                "fecha_cierre": fechas["cierre"],
-                "fecha_inicio": fechas["inicio"],
-                "fecha_publicacion": fechas["publicacion"],
-                "fecha_adjudicacion": fechas["adjudicacion"],
-                "codigo_estado": datos_api.get("CodigoEstado"),
-                "codigo_organismo": cod_org,
-                "tiene_detalle": True,
-                # Campos auxiliares para asegurar dependencias en el almacenador
-                "_nombre_organismo": comprador.get("NombreOrganismo", "Desconocido"),
-                "_descripcion_estado": datos_api.get("Estado", "Desconocido")
-            }
+            # Inyección de metadatos calculados en el diccionario original de la API
+            datos_api["_PuntajeCalculado"] = puntaje_total
+            datos_api["_Justificacion"] = "\n".join(motivos_completos)
+            datos_api["_TieneDetalle"] = True
+            datos_api["_EtapaAsignada"] = etapa_destino
 
             emitir("Guardando en base de datos...")
-            self.almacenador.guardar_licitacion_individual(registro_db)
+            self.almacenador.guardar_licitacion_individual(datos_api)
             self.repositorio.mover_licitacion(codigo, etapa_destino)
 
             return True, f"La licitación '{codigo}' fue procesada y movida a '{etapa_destino}' exitosamente."

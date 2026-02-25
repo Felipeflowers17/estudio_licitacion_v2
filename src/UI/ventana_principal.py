@@ -85,6 +85,8 @@ class VentanaPrincipal(QMainWindow):
         self.vista_seguimiento.datos_actualizados_global.connect(self.invalidar_caches)
         self.vista_ofertadas.datos_actualizados_global.connect(self.invalidar_caches)
         
+        self.vista_herramientas.datos_actualizados_global.connect(self.invalidar_caches)
+        
         self.layout_principal.addWidget(self.pila_vistas)
 
     def invalidar_caches(self):

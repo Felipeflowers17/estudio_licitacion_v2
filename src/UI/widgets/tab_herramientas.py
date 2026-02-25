@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QLabel)
+from PySide6.QtCore import Signal
 
 # Importaciones de subpestañas (Ajustadas al estándar de nomenclatura que aplicaremos)
 from src.UI.widgets.sub_tabs_herramientas.tab_extraer import SubTabExtraer
@@ -12,6 +13,8 @@ class TabHerramientas(QWidget):
     y configuración del sistema. Utiliza un sistema de subpestañas.
     """
     
+    datos_actualizados_global = Signal()
+
     def __init__(self): 
         super().__init__()
         
@@ -27,6 +30,7 @@ class TabHerramientas(QWidget):
 
         # Instanciación de las subpestañas operativas
         self.vista_extraer = SubTabExtraer()
+        self.vista_extraer.extraccion_completada.connect(self.datos_actualizados_global.emit)
         self.vista_exportar = SubTabExportar()
         self.vista_puntajes = SubTabPuntajes()
         self.vista_piloto = SubTabPilotoAutomatico()

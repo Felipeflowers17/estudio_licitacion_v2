@@ -32,3 +32,13 @@ TAMANIO_CHUNK_EXPORTACION = 2000
 # Resiliencia del Piloto Automático
 PILOTO_MAX_REINTENTOS = 3
 PILOTO_MINUTOS_REINTENTOS_BASE = 5
+
+# Diccionario oficial de estados de Mercado Público
+ESTADOS_MERCADO_PUBLICO = {
+    5: "Publicada",
+    6: "Cerrada",
+    7: "Desierta",
+    8: "Adjudicada",
+    18: "Revocada",
+    19: "Suspendida"
+}

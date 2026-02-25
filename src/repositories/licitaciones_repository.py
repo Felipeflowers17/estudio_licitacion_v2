@@ -59,11 +59,12 @@ class RepositorioLicitaciones:
         """Recupera licitaciones candidatas con soporte para paginación."""
         with self.session_factory() as sesion:
             try:
-                # Aplicamos filtros de puntaje y etapa, ordenando por relevancia
+                # Aplicamos filtros de puntaje, etapa y ESTADO ACTIVO, ordenando por relevancia
                 return sesion.query(Licitacion)\
                     .options(joinedload(Licitacion.estado))\
                     .filter(Licitacion.puntaje > UMBRAL_PUNTAJE_CANDIDATA)\
-                    .filter(or_(Licitacion.etapa == EtapaLicitacion.CANDIDATA.value, Licitacion.etapa == None))\
+                    .filter(or_(Licitacion.etapa == EtapaLicitacion.CANDIDATA.value, Licitacion.etapa.is_(None)))\
+                    .filter(Licitacion.codigo_estado == ESTADO_LICITACION_ACTIVA)\
                     .order_by(Licitacion.puntaje.desc())\
                     .limit(limit).offset(offset).all()
             except Exception as e:

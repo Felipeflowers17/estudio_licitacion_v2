@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from src.bd.database import SessionLocal
 from src.bd.models import Licitacion, EstadoLicitacion, Organismo
 from src.utils.logger import configurar_logger
-from src.config.constantes import EtapaLicitacion
+from src.config.constantes import EtapaLicitacion, ESTADOS_MERCADO_PUBLICO
 
 logger = configurar_logger("almacenador_bd")
 
@@ -47,8 +47,22 @@ class AlmacenadorLicitaciones:
                 datos_comprador = datos_licitacion.get("Comprador", {})
                 self._asegurar_organismo(sesion, datos_comprador)
 
-                codigo_estado = datos_licitacion.get("CodigoEstado")
-                descripcion_estado = datos_licitacion.get("Estado", "Desconocido")
+                # Extraemos el código tal como viene de la API (suele venir como string)
+                codigo_estado_raw = datos_licitacion.get("CodigoEstado")
+                
+                # Transformación segura a entero para evitar fallos de búsqueda en el diccionario
+                try:
+                    codigo_estado = int(codigo_estado_raw) if codigo_estado_raw is not None else None
+                except (ValueError, TypeError):
+                    codigo_estado = codigo_estado_raw
+
+                # Intentamos obtener la descripción de nuestro diccionario oficial. 
+                # Si es un código nuevo no registrado, usamos el que provea la API o "Desconocido".
+                descripcion_estado = ESTADOS_MERCADO_PUBLICO.get(
+                    codigo_estado, 
+                    datos_licitacion.get("Estado", "Desconocido")
+                )
+                
                 self._asegurar_estado(sesion, codigo_estado, descripcion_estado)
 
                 # 2. Transformar datos crudos en valores listos para persistir
@@ -76,6 +90,107 @@ class AlmacenadorLicitaciones:
                 # Rollback obligatorio para no dejar la sesión en estado corrupto
                 sesion.rollback()
                 logger.error(f"Error guardando licitación {codigo_externo}: {error_bd}")
+    
+    def guardar_lote_masivo(self, lote_licitaciones: list, lote_organismos: list, lote_estados: list):
+        """
+        Procesa e inserta un lote completo de licitaciones y sus dependencias
+        en una única transacción de base de datos para maximizar el rendimiento.
+        """
+        if not lote_licitaciones:
+            return
+
+        with self.session_factory() as sesion:
+            try:
+                # 1. Asegurar Estados (con conversión segura de tipos)
+                for estado in lote_estados:
+                    codigo_estado_raw = estado.get("codigo")
+                    try:
+                        cod_est = int(codigo_estado_raw) if codigo_estado_raw is not None else None
+                    except (ValueError, TypeError):
+                        cod_est = codigo_estado_raw
+                        
+                    descripcion_oficial = ESTADOS_MERCADO_PUBLICO.get(
+                        cod_est, 
+                        estado.get("descripcion", "Desconocido")
+                    )
+                    self._asegurar_estado(sesion, cod_est, descripcion_oficial)
+
+                # 2. Asegurar Organismos
+                for org in lote_organismos:
+                    if not org.get("codigo"): 
+                        continue
+                    existe_org = sesion.query(Organismo).filter_by(codigo=org["codigo"]).first()
+                    if not existe_org:
+                        sesion.add(Organismo(codigo=org["codigo"], nombre=org["nombre"]))
+                
+                # Sincronizamos los IDs de estados y organismos antes de insertar licitaciones
+                sesion.flush()
+
+                # 3. Upsert Vectorizado de Licitaciones
+                for datos in lote_licitaciones:
+                    codigo_ext = datos.get("codigo_externo")
+                    if not codigo_ext:
+                        continue
+
+                    # Conversión de código de estado para este registro
+                    codigo_estado_raw = datos.get("codigo_estado")
+                    try:
+                        cod_est = int(codigo_estado_raw) if codigo_estado_raw is not None else None
+                    except (ValueError, TypeError):
+                        cod_est = codigo_estado_raw
+
+                    registro_existente = sesion.query(Licitacion).filter_by(codigo_externo=codigo_ext).first()
+
+                    if registro_existente:
+                        # Actualización de campos básicos
+                        registro_existente.nombre = datos.get("nombre") or registro_existente.nombre
+                        registro_existente.codigo_estado = cod_est
+                        registro_existente.fecha_cierre = datos.get("fecha_cierre") or registro_existente.fecha_cierre
+                        registro_existente.fecha_inicio = datos.get("fecha_inicio")
+                        registro_existente.fecha_publicacion = datos.get("fecha_publicacion")
+                        registro_existente.fecha_adjudicacion = datos.get("fecha_adjudicacion")
+                        registro_existente.puntaje = datos.get("puntaje", 0)
+                        registro_existente.justificacion_puntaje = datos.get("justificacion_puntaje", "")
+
+                        # Actualización condicional de detalles profundos
+                        if datos.get("tiene_detalle"):
+                            registro_existente.codigo_organismo = datos.get("codigo_organismo")
+                            registro_existente.descripcion = datos.get("descripcion")
+                            registro_existente.detalle_productos = datos.get("detalle_productos")
+                            registro_existente.tiene_detalle = True
+
+                        # Regla de ascenso de etapa
+                        if registro_existente.etapa == EtapaLicitacion.IGNORADA.value and datos.get("etapa") == EtapaLicitacion.CANDIDATA.value:
+                            registro_existente.etapa = EtapaLicitacion.CANDIDATA.value
+
+                    else:
+                        # Inserción de nuevo registro
+                        nuevo_registro = Licitacion(
+                            codigo_externo=codigo_ext,
+                            nombre=datos.get("nombre"),
+                            codigo_estado=cod_est,
+                            descripcion=datos.get("descripcion"),
+                            codigo_organismo=datos.get("codigo_organismo"),
+                            tiene_detalle=datos.get("tiene_detalle", False),
+                            puntaje=datos.get("puntaje", 0),
+                            justificacion_puntaje=datos.get("justificacion_puntaje", ""),
+                            etapa=datos.get("etapa", EtapaLicitacion.IGNORADA.value),
+                            detalle_productos=datos.get("detalle_productos"),
+                            fecha_cierre=datos.get("fecha_cierre"),
+                            fecha_inicio=datos.get("fecha_inicio"),
+                            fecha_publicacion=datos.get("fecha_publicacion"),
+                            fecha_adjudicacion=datos.get("fecha_adjudicacion"),
+                        )
+                        sesion.add(nuevo_registro)
+
+                # 4. Confirmar la transacción completa
+                sesion.commit()
+                logger.info(f"Lote masivo sincronizado exitosamente: {len(lote_licitaciones)} registros.")
+
+            except Exception as error_bd:
+                sesion.rollback()
+                logger.error(f"Fallo crítico durante inserción masiva: {error_bd}")
+                raise error_bd
 
     # =========================================================================
     # MÉTODOS PRIVADOS DE TRANSFORMACIÓN (Sin acceso a BD, 100% testeables)

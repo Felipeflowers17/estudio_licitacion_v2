@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QDateEdit, QSpinBox, QPushButton, QGroupBox,
                                QMessageBox, QDialog, QLineEdit, QComboBox,
                                QDialogButtonBox)
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, Qt, Signal
 from datetime import datetime
 
 from src.UI.workers.scraping_worker import TrabajadorExtraccion, TrabajadorExtraccionManual
@@ -101,6 +101,8 @@ class SubTabExtraer(QWidget):
     Subpestaña encargada de gestionar tanto la extracción masiva asíncrona
     como la inyección manual de licitaciones específicas.
     """
+    extraccion_completada = Signal()
+
     def __init__(self):
         super().__init__()
 
@@ -124,15 +126,6 @@ class SubTabExtraer(QWidget):
         layout_fechas.addWidget(QLabel("Fecha de Término:"))
         layout_fechas.addWidget(self.fecha_hasta)
         layout_masivo.addLayout(layout_fechas)
-
-        layout_paginas = QHBoxLayout()
-        layout_paginas.addWidget(QLabel("Límite Máximo de Páginas a Consultar:"))
-        self.selector_paginas = QSpinBox()
-        self.selector_paginas.setRange(0, 1000)
-        self.selector_paginas.setFixedWidth(80)
-        layout_paginas.addWidget(self.selector_paginas)
-        layout_paginas.addStretch()
-        layout_masivo.addLayout(layout_paginas)
 
         # Fila de botones: Iniciar + Cancelar (cancelar oculto por defecto)
         fila_botones_masivo = QHBoxLayout()
@@ -230,6 +223,7 @@ class SubTabExtraer(QWidget):
     def notificar_finalizacion(self):
         QMessageBox.information(self, "Operación Finalizada", "El proceso de recolección y análisis ha concluido exitosamente.")
         self._restaurar_botones_masivo()
+        self.extraccion_completada.emit()
 
     def desplegar_error(self, mensaje_error: str):
         QMessageBox.critical(self, "Error de Ejecución", mensaje_error)
@@ -268,5 +262,6 @@ class SubTabExtraer(QWidget):
 
         if exito:
             QMessageBox.information(self, "Operación Exitosa", mensaje)
+            self.extraccion_completada.emit()
         else:
             QMessageBox.warning(self, "Falla en la Búsqueda", mensaje)
